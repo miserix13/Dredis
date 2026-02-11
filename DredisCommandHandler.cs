@@ -19,6 +19,11 @@ namespace Dredis
             _store = store;
         }
 
+        /// <summary>
+        /// Handles incoming Redis messages from the channel and dispatches commands to appropriate handlers.
+        /// </summary>
+        /// <param name="ctx">The channel handler context.</param>
+        /// <param name="msg">The Redis message to process.</param>
         protected override void ChannelRead0(IChannelHandlerContext ctx, IRedisMessage msg)
         {
             if (msg is IArrayRedisMessage array)
@@ -106,6 +111,22 @@ namespace Dredis
 
                 case "PTTL":
                     await HandlePttlAsync(ctx, elements);
+                    break;
+
+                case "HSET":
+                    await HandleHSetAsync(ctx, elements);
+                    break;
+
+                case "HGET":
+                    await HandleHGetAsync(ctx, elements);
+                    break;
+
+                case "HDEL":
+                    await HandleHDelAsync(ctx, elements);
+                    break;
+
+                case "HGETALL":
+                    await HandleHGetAllAsync(ctx, elements);
                     break;
 
                 default:
@@ -580,6 +601,134 @@ namespace Dredis
 
             var ttl = await _store.PttlAsync(key).ConfigureAwait(false);
             WriteInteger(ctx, ttl);
+        }
+
+        private async Task HandleHSetAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count < 4 || (args.Count - 2) % 2 != 0)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'hset' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            long added = 0;
+            for (int i = 2; i < args.Count; i += 2)
+            {
+                if (!TryGetString(args[i], out var field))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                if (!TryGetBytes(args[i + 1], out var value))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                var isNew = await _store.HashSetAsync(key, field, value).ConfigureAwait(false);
+                if (isNew)
+                {
+                    added++;
+                }
+            }
+
+            WriteInteger(ctx, added);
+        }
+
+        private async Task HandleHGetAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'hget' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key) || !TryGetString(args[2], out var field))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var value = await _store.HashGetAsync(key, field).ConfigureAwait(false);
+            if (value == null)
+            {
+                WriteNullBulkString(ctx);
+                return;
+            }
+
+            WriteBulkString(ctx, value);
+        }
+
+        private async Task HandleHDelAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count < 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'hdel' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var fields = new string[args.Count - 2];
+            for (int i = 2; i < args.Count; i++)
+            {
+                if (!TryGetString(args[i], out var field))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                fields[i - 2] = field;
+            }
+
+            var removed = await _store.HashDeleteAsync(key, fields).ConfigureAwait(false);
+            WriteInteger(ctx, removed);
+        }
+
+        private async Task HandleHGetAllAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 2)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'hgetall' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var entries = await _store.HashGetAllAsync(key).ConfigureAwait(false);
+            var children = new IRedisMessage[entries.Length * 2];
+
+            for (int i = 0; i < entries.Length; i++)
+            {
+                var fieldBytes = Utf8.GetBytes(entries[i].Key);
+                children[i * 2] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(fieldBytes));
+                children[i * 2 + 1] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(entries[i].Value));
+            }
+
+            WriteArray(ctx, children);
         }
 
         private static string GetString(IRedisMessage msg)

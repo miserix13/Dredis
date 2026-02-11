@@ -378,6 +378,113 @@ namespace Dredis.Tests
             }
         }
 
+        [Fact]
+        public async Task HSet_HGet_RoundTrip()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("HSET", "hash", "field", "value"));
+                channel.RunPendingTasks();
+
+                var setResponse = ReadOutbound(channel);
+                var setCount = Assert.IsType<IntegerRedisMessage>(setResponse);
+                Assert.Equal(1, setCount.Value);
+
+                channel.WriteInbound(Command("HGET", "hash", "field"));
+                channel.RunPendingTasks();
+
+                var getResponse = ReadOutbound(channel);
+                var bulk = Assert.IsType<FullBulkStringRedisMessage>(getResponse);
+                Assert.Equal("value", GetBulkString(bulk));
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task HSet_UpdateField_ReturnsZero()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("HSET", "hash", "field", "first"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("HSET", "hash", "field", "second"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var count = Assert.IsType<IntegerRedisMessage>(response);
+                Assert.Equal(0, count.Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task HDel_RemovesFields_ReturnsCount()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("HSET", "hash", "a", "1", "b", "2"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("HDEL", "hash", "a", "b", "c"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var count = Assert.IsType<IntegerRedisMessage>(response);
+                Assert.Equal(2, count.Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task HGetAll_ReturnsAllPairs()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("HSET", "hash", "a", "1", "b", "2"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("HGETALL", "hash"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var array = Assert.IsType<ArrayRedisMessage>(response);
+                Assert.Equal(4, array.Children.Count);
+
+                var pairs = GetHashPairs(array.Children);
+                Assert.Equal("1", pairs["a"]);
+                Assert.Equal("2", pairs["b"]);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
         private static IRedisMessage ReadOutbound(EmbeddedChannel channel)
         {
             channel.RunPendingTasks();
@@ -419,17 +526,35 @@ namespace Dredis.Tests
 
             return null;
         }
+
+        private static Dictionary<string, string> GetHashPairs(IList<IRedisMessage> children)
+        {
+            var result = new Dictionary<string, string>(StringComparer.Ordinal);
+            for (int i = 0; i < children.Count; i += 2)
+            {
+                var field = GetBulkOrNull(children[i]);
+                var value = GetBulkOrNull(children[i + 1]);
+                if (field != null && value != null)
+                {
+                    result[field] = value;
+                }
+            }
+
+            return result;
+        }
     }
 
     internal sealed class InMemoryKeyValueStore : IKeyValueStore
     {
         private readonly Dictionary<string, byte[]> _data = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, Dictionary<string, byte[]>> _hashes = new(StringComparer.Ordinal);
         private readonly Dictionary<string, DateTimeOffset?> _expirations = new(StringComparer.Ordinal);
         private static readonly Encoding Utf8 = new UTF8Encoding(false);
 
         public void Seed(string key, string value)
         {
             _data[key] = Utf8.GetBytes(value);
+            _hashes.Remove(key);
             _expirations.Remove(key);
         }
 
@@ -458,6 +583,7 @@ namespace Dredis.Tests
             }
 
             _data[key] = value;
+            _hashes.Remove(key);
 
             if (expiration.HasValue)
             {
@@ -487,6 +613,7 @@ namespace Dredis.Tests
             foreach (var item in items)
             {
                 _data[item.Key] = item.Value;
+                _hashes.Remove(item.Key);
                 _expirations.Remove(item.Key);
             }
 
@@ -501,8 +628,14 @@ namespace Dredis.Tests
                 if (_data.Remove(key))
                 {
                     removed++;
-                    _expirations.Remove(key);
                 }
+
+                if (_hashes.Remove(key))
+                {
+                    removed++;
+                }
+
+                _expirations.Remove(key);
             }
 
             return Task.FromResult(removed);
@@ -638,15 +771,99 @@ namespace Dredis.Tests
 
             foreach (var key in expiredKeys)
             {
-                if (_data.Remove(key))
+                removed += RemoveKey(key) ? 1 : 0;
+            }
+
+            return Task.FromResult(removed);
+        }
+
+        public Task<bool> HashSetAsync(string key, string field, byte[] value, CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+            }
+
+            if (!_hashes.TryGetValue(key, out var hash))
+            {
+                hash = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+                _hashes[key] = hash;
+                _data.Remove(key);
+            }
+
+            var isNew = !hash.ContainsKey(field);
+            hash[field] = value;
+            return Task.FromResult(isNew);
+        }
+
+        public Task<byte[]?> HashGetAsync(string key, string field, CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+                return Task.FromResult<byte[]?>(null);
+            }
+
+            if (!_hashes.TryGetValue(key, out var hash) || !hash.TryGetValue(field, out var value))
+            {
+                return Task.FromResult<byte[]?>(null);
+            }
+
+            return Task.FromResult<byte[]?>(value);
+        }
+
+        public Task<long> HashDeleteAsync(string key, string[] fields, CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+                return Task.FromResult(0L);
+            }
+
+            if (!_hashes.TryGetValue(key, out var hash))
+            {
+                return Task.FromResult(0L);
+            }
+
+            long removed = 0;
+            foreach (var field in fields)
+            {
+                if (hash.Remove(field))
                 {
                     removed++;
                 }
+            }
 
+            if (hash.Count == 0)
+            {
+                _hashes.Remove(key);
                 _expirations.Remove(key);
             }
 
             return Task.FromResult(removed);
+        }
+
+        public Task<KeyValuePair<string, byte[]>[]> HashGetAllAsync(string key, CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+                return Task.FromResult(Array.Empty<KeyValuePair<string, byte[]>>());
+            }
+
+            if (!_hashes.TryGetValue(key, out var hash))
+            {
+                return Task.FromResult(Array.Empty<KeyValuePair<string, byte[]>>());
+            }
+
+            var items = new KeyValuePair<string, byte[]>[hash.Count];
+            int index = 0;
+            foreach (var pair in hash)
+            {
+                items[index++] = pair;
+            }
+
+            return Task.FromResult(items);
         }
 
         private byte[]? GetValue(string key)
@@ -666,9 +883,26 @@ namespace Dredis.Tests
                 return value;
             }
 
-            _data.Remove(key);
-            _expirations.Remove(key);
+            RemoveKey(key);
             return null;
+        }
+
+        private bool IsExpired(string key)
+        {
+            if (!_expirations.TryGetValue(key, out var expiresAt) || expiresAt == null)
+            {
+                return false;
+            }
+
+            return expiresAt.Value <= DateTimeOffset.UtcNow;
+        }
+
+        private bool RemoveKey(string key)
+        {
+            var removed = _data.Remove(key);
+            removed |= _hashes.Remove(key);
+            _expirations.Remove(key);
+            return removed;
         }
     }
 }

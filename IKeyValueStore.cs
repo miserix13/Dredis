@@ -138,6 +138,42 @@ namespace Dredis
         /// <param name="token">A cancellation token that can be used to cancel the asynchronous operation.</param>
         /// <returns>A task that represents the asynchronous operation. The task result contains the PTTL value in milliseconds.</returns>
         Task<long> PttlAsync(string key, CancellationToken token = default);
+
+        /// <summary>
+        /// Sets a hash field to the specified value. Returns true if the field was newly created.
+        /// </summary>
+        /// <param name="key">The hash key.</param>
+        /// <param name="field">The hash field name.</param>
+        /// <param name="value">The hash field value.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result is true if the field was added.</returns>
+        Task<bool> HashSetAsync(string key, string field, byte[] value, CancellationToken token = default);
+
+        /// <summary>
+        /// Retrieves the value for a hash field, or null if missing.
+        /// </summary>
+        /// <param name="key">The hash key.</param>
+        /// <param name="field">The hash field name.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the field value, or null.</returns>
+        Task<byte[]?> HashGetAsync(string key, string field, CancellationToken token = default);
+
+        /// <summary>
+        /// Removes one or more fields from a hash.
+        /// </summary>
+        /// <param name="key">The hash key.</param>
+        /// <param name="fields">The hash field names.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the number of fields removed.</returns>
+        Task<long> HashDeleteAsync(string key, string[] fields, CancellationToken token = default);
+
+        /// <summary>
+        /// Retrieves all fields and values from a hash.
+        /// </summary>
+        /// <param name="key">The hash key.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains field/value pairs.</returns>
+        Task<KeyValuePair<string, byte[]>[]> HashGetAllAsync(string key, CancellationToken token = default);
         /// <summary>
         /// Asynchronously removes all expired keys from the cache.
         /// </summary>
