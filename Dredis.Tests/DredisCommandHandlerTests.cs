@@ -150,6 +150,234 @@ namespace Dredis.Tests
             }
         }
 
+        [Fact]
+        public async Task MGet_ReturnsValuesAndNulls()
+        {
+            var store = new InMemoryKeyValueStore();
+            store.Seed("one", "1");
+            store.Seed("three", "3");
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("MGET", "one", "two", "three"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var array = Assert.IsType<ArrayRedisMessage>(response);
+                Assert.Equal(3, array.Children.Count);
+
+                Assert.Equal("1", GetBulkOrNull(array.Children[0]));
+                Assert.Null(GetBulkOrNull(array.Children[1]));
+                Assert.Equal("3", GetBulkOrNull(array.Children[2]));
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task MSet_SetsValues_ReturnsOk()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("MSET", "alpha", "1", "bravo", "2"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var ok = Assert.IsType<SimpleStringRedisMessage>(response);
+                Assert.Equal("OK", ok.Content);
+
+                channel.WriteInbound(Command("GET", "alpha"));
+                channel.RunPendingTasks();
+
+                var getResponse = ReadOutbound(channel);
+                var bulk = Assert.IsType<FullBulkStringRedisMessage>(getResponse);
+                Assert.Equal("1", GetBulkString(bulk));
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task Del_RemovesKeys_ReturnsCount()
+        {
+            var store = new InMemoryKeyValueStore();
+            store.Seed("a", "1");
+            store.Seed("b", "2");
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("DEL", "a", "b", "c"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var integer = Assert.IsType<IntegerRedisMessage>(response);
+                Assert.Equal(2, integer.Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task Exists_SingleAndMulti_ReturnsCounts()
+        {
+            var store = new InMemoryKeyValueStore();
+            store.Seed("a", "1");
+            store.Seed("b", "2");
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("EXISTS", "a"));
+                channel.RunPendingTasks();
+
+                var singleResponse = ReadOutbound(channel);
+                var single = Assert.IsType<IntegerRedisMessage>(singleResponse);
+                Assert.Equal(1, single.Value);
+
+                channel.WriteInbound(Command("EXISTS", "a", "b", "c"));
+                channel.RunPendingTasks();
+
+                var multiResponse = ReadOutbound(channel);
+                var multi = Assert.IsType<IntegerRedisMessage>(multiResponse);
+                Assert.Equal(2, multi.Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task Incr_Decr_RoundTrip()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("INCR", "counter"));
+                channel.RunPendingTasks();
+
+                var incrResponse = ReadOutbound(channel);
+                var incr = Assert.IsType<IntegerRedisMessage>(incrResponse);
+                Assert.Equal(1, incr.Value);
+
+                channel.WriteInbound(Command("DECR", "counter"));
+                channel.RunPendingTasks();
+
+                var decrResponse = ReadOutbound(channel);
+                var decr = Assert.IsType<IntegerRedisMessage>(decrResponse);
+                Assert.Equal(0, decr.Value);
+
+                channel.WriteInbound(Command("INCRBY", "counter", "5"));
+                channel.RunPendingTasks();
+
+                var incrByResponse = ReadOutbound(channel);
+                var incrBy = Assert.IsType<IntegerRedisMessage>(incrByResponse);
+                Assert.Equal(5, incrBy.Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task Expire_Ttl_ReturnsRemainingSeconds()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("SET", "temp", "value"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("EXPIRE", "temp", "2"));
+                channel.RunPendingTasks();
+
+                var expireResponse = ReadOutbound(channel);
+                var expire = Assert.IsType<IntegerRedisMessage>(expireResponse);
+                Assert.Equal(1, expire.Value);
+
+                channel.WriteInbound(Command("TTL", "temp"));
+                channel.RunPendingTasks();
+
+                var ttlResponse = ReadOutbound(channel);
+                var ttl = Assert.IsType<IntegerRedisMessage>(ttlResponse);
+                Assert.InRange(ttl.Value, 0, 2);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task PExpire_Pttl_ReturnsRemainingMilliseconds()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("SET", "temp", "value"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("PEXPIRE", "temp", "1500"));
+                channel.RunPendingTasks();
+
+                var expireResponse = ReadOutbound(channel);
+                var expire = Assert.IsType<IntegerRedisMessage>(expireResponse);
+                Assert.Equal(1, expire.Value);
+
+                channel.WriteInbound(Command("PTTL", "temp"));
+                channel.RunPendingTasks();
+
+                var ttlResponse = ReadOutbound(channel);
+                var ttl = Assert.IsType<IntegerRedisMessage>(ttlResponse);
+                Assert.InRange(ttl.Value, 0, 1500);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task Ttl_MissingKey_ReturnsMinusTwo()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("TTL", "missing"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var ttl = Assert.IsType<IntegerRedisMessage>(response);
+                Assert.Equal(-2, ttl.Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
         private static IRedisMessage ReadOutbound(EmbeddedChannel channel)
         {
             channel.RunPendingTasks();
@@ -175,6 +403,21 @@ namespace Dredis.Tests
             var buffer = new byte[length];
             message.Content.GetBytes(message.Content.ReaderIndex, buffer, 0, length);
             return Utf8.GetString(buffer, 0, length);
+        }
+
+        private static string? GetBulkOrNull(IRedisMessage message)
+        {
+            if (ReferenceEquals(message, FullBulkStringRedisMessage.Null))
+            {
+                return null;
+            }
+
+            if (message is FullBulkStringRedisMessage bulk)
+            {
+                return GetBulkString(bulk);
+            }
+
+            return null;
         }
     }
 
