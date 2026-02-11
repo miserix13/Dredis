@@ -1,5 +1,14 @@
-﻿namespace Dredis
+﻿using System.Collections.Generic;
+
+namespace Dredis
 {
+    public enum SetCondition
+    {
+        None,
+        Nx,
+        Xx
+    }
+
     /// <summary>
     /// Key-Value Storage abstraction for Dredis.
     /// </summary>
@@ -25,10 +34,32 @@
         /// <param name="value">The value to store in the cache as a byte array. This parameter cannot be null.</param>
         /// <param name="expiration">An optional time interval after which the cached value expires and is removed. If null, the value does not
         /// expire.</param>
+        /// <param name="condition">A conditional flag that controls whether the key is set.</param>
         /// <param name="token">A cancellation token that can be used to cancel the asynchronous operation.</param>
         /// <returns>A task that represents the asynchronous operation. The task result is <see langword="true"/> if the value
         /// was successfully set; otherwise, <see langword="false"/>.</returns>
-        Task<bool> SetAsync(string key, byte[] value, TimeSpan? expiration, CancellationToken token = default);
+        Task<bool> SetAsync(
+            string key,
+            byte[] value,
+            TimeSpan? expiration,
+            SetCondition condition,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Asynchronously retrieves values for multiple keys. The result preserves input order and uses null for missing keys.
+        /// </summary>
+        /// <param name="keys">The keys to retrieve.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains values aligned with input keys.</returns>
+        Task<byte[]?[]> GetManyAsync(string[] keys, CancellationToken token = default);
+
+        /// <summary>
+        /// Asynchronously sets multiple key-value pairs.
+        /// </summary>
+        /// <param name="items">Key-value pairs to set.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result is true if all values were set.</returns>
+        Task<bool> SetManyAsync(KeyValuePair<string, byte[]>[] items, CancellationToken token = default);
         /// <summary>
         /// Asynchronously deletes the items identified by the specified keys.
         /// </summary>
@@ -42,12 +73,30 @@
         /// successfully deleted.</returns>
         Task<long> DeleteAsync(string[] keys, CancellationToken token = default);
         /// <summary>
-        /// Determines whether or not a specific key exist.
+        /// Determines whether or not a specific key exists.
         /// </summary>
-        /// <param name="key"></param>
-        /// <param name="token"></param>
-        /// <returns></returns>
+        /// <param name="key">The key to check.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result is true if the key exists.</returns>
         Task<bool> ExistsAsync(string key, CancellationToken token = default);
+
+        /// <summary>
+        /// Determines how many of the specified keys exist.
+        /// </summary>
+        /// <param name="keys">Keys to check.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the count of existing keys.</returns>
+        Task<long> ExistsAsync(string[] keys, CancellationToken token = default);
+
+        /// <summary>
+        /// Increments the integer value stored at key by the given delta. Missing keys are created.
+        /// Returns null if the value is not a valid integer or on overflow.
+        /// </summary>
+        /// <param name="key">The key to increment.</param>
+        /// <param name="delta">The delta to add (can be negative).</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result is the new value or null on error.</returns>
+        Task<long?> IncrByAsync(string key, long delta, CancellationToken token = default);
         /// <summary>
         /// Asynchronously sets an expiration time for the cache entry associated with the specified key.
         /// </summary>
@@ -60,17 +109,35 @@
         /// <returns>A task that represents the asynchronous operation. The task result is <see langword="true"/> if the cache
         /// entry was successfully set to expire; otherwise, <see langword="false"/>.</returns>
         Task<bool> ExpireAsync(string key, TimeSpan expiration, CancellationToken token = default);
+
+        /// <summary>
+        /// Asynchronously sets an expiration time (in milliseconds) for the cache entry associated with the specified key.
+        /// </summary>
+        /// <param name="key">The unique identifier of the cache entry to expire. This value cannot be null or empty.</param>
+        /// <param name="expiration">The duration after which the cache entry should expire. Must be a positive time interval.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result is true if the cache entry was set to expire.</returns>
+        Task<bool> PExpireAsync(string key, TimeSpan expiration, CancellationToken token = default);
         /// <summary>
         /// Asynchronously retrieves the time-to-live (TTL) value, in seconds, for the specified key.
         /// </summary>
         /// <remarks>Use this method to determine how long a key will remain in the store before it is
-        /// automatically deleted. If the key does not exist or has no expiration, the method returns -1 to indicate
-        /// that there is no TTL associated with the key.</remarks>
+        /// automatically deleted. If the key does not exist, the method returns -2. If the key has no expiration,
+        /// the method returns -1.</remarks>
         /// <param name="key">The key whose TTL value is to be retrieved. The key must exist in the store.</param>
         /// <param name="token">A cancellation token that can be used to cancel the asynchronous operation.</param>
-        /// <returns>A task that represents the asynchronous operation. The task result contains the TTL value in seconds.
-        /// Returns -1 if the key does not exist or if no expiration is set.</returns>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the TTL value in seconds.</returns>
         Task<long> TtlAsync(string key, CancellationToken token = default);
+
+        /// <summary>
+        /// Asynchronously retrieves the time-to-live (PTTL) value, in milliseconds, for the specified key.
+        /// </summary>
+        /// <remarks>If the key does not exist, the method returns -2. If the key has no expiration,
+        /// the method returns -1.</remarks>
+        /// <param name="key">The key whose PTTL value is to be retrieved. The key must exist in the store.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the asynchronous operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the PTTL value in milliseconds.</returns>
+        Task<long> PttlAsync(string key, CancellationToken token = default);
         /// <summary>
         /// Asynchronously removes all expired keys from the cache.
         /// </summary>

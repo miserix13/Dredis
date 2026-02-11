@@ -1,6 +1,6 @@
+using System.Collections.Generic;
 using System.Text;
 using DotNetty.Buffers;
-using DotNetty.Codecs.Redis;
 using DotNetty.Codecs.Redis.Messages;
 using DotNetty.Transport.Channels;
 
@@ -45,7 +45,11 @@ namespace Dredis
             switch (cmd)
             {
                 case "PING":
-                    WriteSimpleString(ctx, "PONG");
+                    await HandlePingAsync(ctx, elements);
+                    break;
+
+                case "ECHO":
+                    await HandleEchoAsync(ctx, elements);
                     break;
 
                 case "GET":
@@ -56,6 +60,14 @@ namespace Dredis
                     await HandleSetAsync(ctx, elements);
                     break;
 
+                case "MGET":
+                    await HandleMGetAsync(ctx, elements);
+                    break;
+
+                case "MSET":
+                    await HandleMSetAsync(ctx, elements);
+                    break;
+
                 case "DEL":
                     await HandleDelAsync(ctx, elements);
                     break;
@@ -64,18 +76,84 @@ namespace Dredis
                     await HandleExistsAsync(ctx, elements);
                     break;
 
+                case "INCR":
+                    await HandleIncrByAsync(ctx, elements, 1, commandName: "incr");
+                    break;
+
+                case "INCRBY":
+                    await HandleIncrByAsync(ctx, elements, null, commandName: "incrby");
+                    break;
+
+                case "DECR":
+                    await HandleIncrByAsync(ctx, elements, -1, commandName: "decr");
+                    break;
+
+                case "DECRBY":
+                    await HandleIncrByAsync(ctx, elements, null, isDecr: true, commandName: "decrby");
+                    break;
+
                 case "EXPIRE":
                     await HandleExpireAsync(ctx, elements);
+                    break;
+
+                case "PEXPIRE":
+                    await HandlePExpireAsync(ctx, elements);
                     break;
 
                 case "TTL":
                     await HandleTtlAsync(ctx, elements);
                     break;
 
+                case "PTTL":
+                    await HandlePttlAsync(ctx, elements);
+                    break;
+
                 default:
                     WriteError(ctx, $"ERR unknown command '{cmd}'");
                     break;
             }
+        }
+
+        private Task HandlePingAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count == 1)
+            {
+                WriteSimpleString(ctx, "PONG");
+                return Task.CompletedTask;
+            }
+
+            if (args.Count != 2)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'ping' command");
+                return Task.CompletedTask;
+            }
+
+            if (!TryGetBytes(args[1], out var value))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return Task.CompletedTask;
+            }
+
+            WriteBulkString(ctx, value);
+            return Task.CompletedTask;
+        }
+
+        private Task HandleEchoAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count != 2)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'echo' command");
+                return Task.CompletedTask;
+            }
+
+            if (!TryGetBytes(args[1], out var value))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return Task.CompletedTask;
+            }
+
+            WriteBulkString(ctx, value);
+            return Task.CompletedTask;
         }
 
         private async Task HandleGetAsync(
@@ -88,7 +166,11 @@ namespace Dredis
                 return;
             }
 
-            var key = GetString(args[1]);
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
             var value = await _store.GetAsync(key).ConfigureAwait(false);
 
             if (value == null)
@@ -111,31 +193,174 @@ namespace Dredis
                 return;
             }
 
-            var key = GetString(args[1]);
-            var value = GetBytes(args[2]);
-
-            // Optional: SET key value EX seconds
-            TimeSpan? expiration = null;
-            if (args.Count >= 5 &&
-                GetString(args[3]).Equals("EX", StringComparison.OrdinalIgnoreCase))
+            if (!TryGetString(args[1], out var key))
             {
-                if (!long.TryParse(GetString(args[4]), out var seconds) || seconds <= 0)
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            if (!TryGetBytes(args[2], out var value))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var expiration = (TimeSpan?)null;
+            var condition = SetCondition.None;
+
+            for (int i = 3; i < args.Count; i++)
+            {
+                if (!TryGetString(args[i], out var option))
                 {
-                    WriteError(ctx, "ERR invalid expire time in set");
+                    WriteError(ctx, "ERR null bulk string");
                     return;
                 }
 
-                expiration = TimeSpan.FromSeconds(seconds);
+                switch (option.ToUpperInvariant())
+                {
+                    case "EX":
+                        if (i + 1 >= args.Count)
+                        {
+                            WriteError(ctx, "ERR syntax error");
+                            return;
+                        }
+
+                        if (!TryGetString(args[++i], out var exValue) ||
+                            !long.TryParse(exValue, out var seconds) || seconds <= 0)
+                        {
+                            WriteError(ctx, "ERR invalid expire time in set");
+                            return;
+                        }
+
+                        expiration = TimeSpan.FromSeconds(seconds);
+                        break;
+
+                    case "PX":
+                        if (i + 1 >= args.Count)
+                        {
+                            WriteError(ctx, "ERR syntax error");
+                            return;
+                        }
+
+                        if (!TryGetString(args[++i], out var pxValue) ||
+                            !long.TryParse(pxValue, out var milliseconds) || milliseconds <= 0)
+                        {
+                            WriteError(ctx, "ERR invalid expire time in set");
+                            return;
+                        }
+
+                        expiration = TimeSpan.FromMilliseconds(milliseconds);
+                        break;
+
+                    case "NX":
+                        if (condition == SetCondition.Xx)
+                        {
+                            WriteError(ctx, "ERR syntax error");
+                            return;
+                        }
+
+                        condition = SetCondition.Nx;
+                        break;
+
+                    case "XX":
+                        if (condition == SetCondition.Nx)
+                        {
+                            WriteError(ctx, "ERR syntax error");
+                            return;
+                        }
+
+                        condition = SetCondition.Xx;
+                        break;
+
+                    default:
+                        WriteError(ctx, "ERR syntax error");
+                        return;
+                }
             }
 
-            var ok = await _store.SetAsync(key, value, expiration).ConfigureAwait(false);
+            var ok = await _store.SetAsync(key, value, expiration, condition).ConfigureAwait(false);
+            if (ok)
+            {
+                WriteSimpleString(ctx, "OK");
+                return;
+            }
+
+            WriteNullBulkString(ctx);
+        }
+
+        private async Task HandleMGetAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count < 2)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'mget' command");
+                return;
+            }
+
+            var keys = new string[args.Count - 1];
+            for (int i = 1; i < args.Count; i++)
+            {
+                if (!TryGetString(args[i], out var key))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                keys[i - 1] = key;
+            }
+
+            var values = await _store.GetManyAsync(keys).ConfigureAwait(false);
+            var children = new IRedisMessage[values.Length];
+
+            for (int i = 0; i < values.Length; i++)
+            {
+                var value = values[i];
+                children[i] = value == null
+                    ? FullBulkStringRedisMessage.Null
+                    : new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(value));
+            }
+
+            WriteArray(ctx, children);
+        }
+
+        private async Task HandleMSetAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count < 3 || args.Count % 2 == 0)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'mset' command");
+                return;
+            }
+
+            var items = new KeyValuePair<string, byte[]>[(args.Count - 1) / 2];
+            int index = 0;
+            for (int i = 1; i < args.Count; i += 2)
+            {
+                if (!TryGetString(args[i], out var key))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                if (!TryGetBytes(args[i + 1], out var value))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                items[index++] = new KeyValuePair<string, byte[]>(key, value);
+            }
+
+            var ok = await _store.SetManyAsync(items).ConfigureAwait(false);
             if (ok)
             {
                 WriteSimpleString(ctx, "OK");
             }
             else
             {
-                WriteError(ctx, "ERR set failed");
+                WriteError(ctx, "ERR mset failed");
             }
         }
 
@@ -152,7 +377,13 @@ namespace Dredis
             var keys = new string[args.Count - 1];
             for (int i = 1; i < args.Count; i++)
             {
-                keys[i - 1] = GetString(args[i]);
+                if (!TryGetString(args[i], out var key))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                keys[i - 1] = key;
             }
 
             var removed = await _store.DeleteAsync(keys).ConfigureAwait(false);
@@ -163,15 +394,94 @@ namespace Dredis
             IChannelHandlerContext ctx,
             IList<IRedisMessage> args)
         {
-            if (args.Count != 2)
+            if (args.Count < 2)
             {
                 WriteError(ctx, "ERR wrong number of arguments for 'exists' command");
                 return;
             }
 
-            var key = GetString(args[1]);
-            var exists = await _store.ExistsAsync(key).ConfigureAwait(false);
-            WriteInteger(ctx, exists ? 1 : 0);
+            if (args.Count == 2)
+            {
+                if (!TryGetString(args[1], out var key))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                var exists = await _store.ExistsAsync(key).ConfigureAwait(false);
+                WriteInteger(ctx, exists ? 1 : 0);
+                return;
+            }
+
+            var keys = new string[args.Count - 1];
+            for (int i = 1; i < args.Count; i++)
+            {
+                if (!TryGetString(args[i], out var key))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                keys[i - 1] = key;
+            }
+
+            var count = await _store.ExistsAsync(keys).ConfigureAwait(false);
+            WriteInteger(ctx, count);
+        }
+
+        private async Task HandleIncrByAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args,
+            long? fixedDelta,
+            bool isDecr = false,
+            string commandName = "incrby")
+        {
+            if (fixedDelta.HasValue && args.Count != 2)
+            {
+                WriteError(ctx, $"ERR wrong number of arguments for '{commandName}' command");
+                return;
+            }
+
+            if (!fixedDelta.HasValue && args.Count != 3)
+            {
+                WriteError(ctx, $"ERR wrong number of arguments for '{commandName}' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            long delta;
+            if (fixedDelta.HasValue)
+            {
+                delta = fixedDelta.Value;
+            }
+            else
+            {
+                if (!TryGetString(args[2], out var deltaText) ||
+                    !long.TryParse(deltaText, out delta))
+                {
+                    WriteError(ctx, "ERR value is not an integer or out of range");
+                    return;
+                }
+
+                if (isDecr)
+                {
+                    delta = -delta;
+                }
+            }
+
+            var value = await _store.IncrByAsync(key, delta).ConfigureAwait(false);
+            if (!value.HasValue)
+            {
+                WriteError(ctx, "ERR value is not an integer or out of range");
+                return;
+            }
+
+            WriteInteger(ctx, value.Value);
         }
 
         private async Task HandleExpireAsync(
@@ -184,14 +494,49 @@ namespace Dredis
                 return;
             }
 
-            var key = GetString(args[1]);
-            if (!long.TryParse(GetString(args[2]), out var seconds))
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            if (!TryGetString(args[2], out var secondsText) ||
+                !long.TryParse(secondsText, out var seconds))
             {
                 WriteError(ctx, "ERR value is not an integer or out of range");
                 return;
             }
 
             var ok = await _store.ExpireAsync(key, TimeSpan.FromSeconds(seconds))
+                .ConfigureAwait(false);
+
+            WriteInteger(ctx, ok ? 1 : 0);
+        }
+
+        private async Task HandlePExpireAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'pexpire' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            if (!TryGetString(args[2], out var msText) ||
+                !long.TryParse(msText, out var milliseconds))
+            {
+                WriteError(ctx, "ERR value is not an integer or out of range");
+                return;
+            }
+
+            var ok = await _store.PExpireAsync(key, TimeSpan.FromMilliseconds(milliseconds))
                 .ConfigureAwait(false);
 
             WriteInteger(ctx, ok ? 1 : 0);
@@ -207,8 +552,33 @@ namespace Dredis
                 return;
             }
 
-            var key = GetString(args[1]);
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
             var ttl = await _store.TtlAsync(key).ConfigureAwait(false);
+            WriteInteger(ctx, ttl);
+        }
+
+        private async Task HandlePttlAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 2)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'pttl' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var ttl = await _store.PttlAsync(key).ConfigureAwait(false);
             WriteInteger(ctx, ttl);
         }
 
@@ -231,7 +601,28 @@ namespace Dredis
             }
         }
 
-        private static byte[] GetBytes(IRedisMessage msg)
+        private static bool TryGetString(IRedisMessage msg, out string value)
+        {
+            switch (msg)
+            {
+                case FullBulkStringRedisMessage bulk when bulk.Content != null:
+                    var length = bulk.Content.ReadableBytes;
+                    var tmp = new byte[length];
+                    bulk.Content.GetBytes(bulk.Content.ReaderIndex, tmp, 0, length);
+                    value = Utf8.GetString(tmp, 0, length);
+                    return true;
+
+                case SimpleStringRedisMessage simple:
+                    value = simple.Content;
+                    return true;
+
+                default:
+                    value = string.Empty;
+                    return false;
+            }
+        }
+
+        private static bool TryGetBytes(IRedisMessage msg, out byte[] value)
         {
             switch (msg)
             {
@@ -239,13 +630,16 @@ namespace Dredis
                     var length = bulk.Content.ReadableBytes;
                     var buffer = new byte[length];
                     bulk.Content.GetBytes(bulk.Content.ReaderIndex, buffer, 0, length);
-                    return buffer;
+                    value = buffer;
+                    return true;
 
                 case SimpleStringRedisMessage simple:
-                    return Utf8.GetBytes(simple.Content);
+                    value = Utf8.GetBytes(simple.Content);
+                    return true;
 
                 default:
-                    return Array.Empty<byte>();
+                    value = Array.Empty<byte>();
+                    return false;
             }
         }
 
@@ -263,5 +657,8 @@ namespace Dredis
 
         private static void WriteBulkString(IChannelHandlerContext ctx, byte[] data) =>
             ctx.WriteAndFlushAsync(new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(data)));
+
+        private static void WriteArray(IChannelHandlerContext ctx, IList<IRedisMessage> children) =>
+            ctx.WriteAndFlushAsync(new ArrayRedisMessage(children));
     }
 }
