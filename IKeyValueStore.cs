@@ -9,6 +9,30 @@ namespace Dredis
         Xx
     }
 
+    public sealed class StreamEntry
+    {
+        public StreamEntry(string id, KeyValuePair<string, byte[]>[] fields)
+        {
+            Id = id;
+            Fields = fields;
+        }
+
+        public string Id { get; }
+        public KeyValuePair<string, byte[]>[] Fields { get; }
+    }
+
+    public sealed class StreamReadResult
+    {
+        public StreamReadResult(string key, StreamEntry[] entries)
+        {
+            Key = key;
+            Entries = entries;
+        }
+
+        public string Key { get; }
+        public StreamEntry[] Entries { get; }
+    }
+
     /// <summary>
     /// Key-Value Storage abstraction for Dredis.
     /// </summary>
@@ -174,6 +198,51 @@ namespace Dredis
         /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
         /// <returns>A task that represents the asynchronous operation. The task result contains field/value pairs.</returns>
         Task<KeyValuePair<string, byte[]>[]> HashGetAllAsync(string key, CancellationToken token = default);
+
+        /// <summary>
+        /// Adds a stream entry. Returns the entry id, or null if the id is invalid or out of order.
+        /// </summary>
+        /// <param name="key">The stream key.</param>
+        /// <param name="id">The entry id or '*'.</param>
+        /// <param name="fields">Field/value pairs for the entry.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result is the entry id, or null on error.</returns>
+        Task<string?> StreamAddAsync(
+            string key,
+            string id,
+            KeyValuePair<string, byte[]>[] fields,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Removes entries by id from a stream.
+        /// </summary>
+        /// <param name="key">The stream key.</param>
+        /// <param name="ids">Entry ids to remove.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the number of entries removed.</returns>
+        Task<long> StreamDeleteAsync(string key, string[] ids, CancellationToken token = default);
+
+        /// <summary>
+        /// Returns the length of the stream.
+        /// </summary>
+        /// <param name="key">The stream key.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the number of entries.</returns>
+        Task<long> StreamLengthAsync(string key, CancellationToken token = default);
+
+        /// <summary>
+        /// Reads entries with ids greater than the provided ids. Result order matches keys.
+        /// </summary>
+        /// <param name="keys">Stream keys to read.</param>
+        /// <param name="ids">Ids to read after (one per key).</param>
+        /// <param name="count">Optional per-stream count limit.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains stream entries.</returns>
+        Task<StreamReadResult[]> StreamReadAsync(
+            string[] keys,
+            string[] ids,
+            int? count,
+            CancellationToken token = default);
         /// <summary>
         /// Asynchronously removes all expired keys from the cache.
         /// </summary>

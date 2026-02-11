@@ -485,6 +485,101 @@ namespace Dredis.Tests
             }
         }
 
+        [Fact]
+        public async Task XAdd_XLen_ReturnsCount()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("XADD", "stream", "*", "field", "value"));
+                channel.RunPendingTasks();
+
+                var addResponse = ReadOutbound(channel);
+                var addId = Assert.IsType<FullBulkStringRedisMessage>(addResponse);
+                Assert.Contains("-", GetBulkString(addId));
+
+                channel.WriteInbound(Command("XLEN", "stream"));
+                channel.RunPendingTasks();
+
+                var lenResponse = ReadOutbound(channel);
+                var len = Assert.IsType<IntegerRedisMessage>(lenResponse);
+                Assert.Equal(1, len.Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task XRead_ReturnsEntriesAfterId()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("XADD", "stream", "*", "a", "1"));
+                channel.RunPendingTasks();
+                var firstId = GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel)));
+
+                channel.WriteInbound(Command("XADD", "stream", "*", "b", "2"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("XREAD", "STREAMS", "stream", firstId));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var array = Assert.IsType<ArrayRedisMessage>(response);
+                Assert.Single(array.Children);
+
+                var streamMessage = Assert.IsType<ArrayRedisMessage>(array.Children[0]);
+                var entriesMessage = Assert.IsType<ArrayRedisMessage>(streamMessage.Children[1]);
+                var entries = GetStreamEntries(entriesMessage.Children);
+
+                Assert.Equal(1, entries.Count);
+                using var enumerator = entries.GetEnumerator();
+                Assert.True(enumerator.MoveNext());
+                Assert.Equal("2", enumerator.Current.Value["b"]);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task XDel_RemovesEntries_ReturnsCount()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("XADD", "stream", "*", "a", "1"));
+                channel.RunPendingTasks();
+                var firstId = GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel)));
+
+                channel.WriteInbound(Command("XADD", "stream", "*", "b", "2"));
+                channel.RunPendingTasks();
+                var secondId = GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel)));
+
+                channel.WriteInbound(Command("XDEL", "stream", firstId, secondId));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var removed = Assert.IsType<IntegerRedisMessage>(response);
+                Assert.Equal(2, removed.Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
         private static IRedisMessage ReadOutbound(EmbeddedChannel channel)
         {
             channel.RunPendingTasks();
@@ -542,19 +637,69 @@ namespace Dredis.Tests
 
             return result;
         }
+
+        private static Dictionary<string, Dictionary<string, string>> GetStreamEntries(IList<IRedisMessage> children)
+        {
+            var result = new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
+            foreach (var entryMessage in children)
+            {
+                var entryArray = Assert.IsType<ArrayRedisMessage>(entryMessage);
+                var id = GetBulkOrNull(entryArray.Children[0]) ?? string.Empty;
+                var fieldsArray = Assert.IsType<ArrayRedisMessage>(entryArray.Children[1]);
+                result[id] = GetHashPairs(fieldsArray.Children);
+            }
+
+            return result;
+        }
     }
 
     internal sealed class InMemoryKeyValueStore : IKeyValueStore
     {
         private readonly Dictionary<string, byte[]> _data = new(StringComparer.Ordinal);
         private readonly Dictionary<string, Dictionary<string, byte[]>> _hashes = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, List<StreamEntryModel>> _streams = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, StreamId> _streamLastIds = new(StringComparer.Ordinal);
         private readonly Dictionary<string, DateTimeOffset?> _expirations = new(StringComparer.Ordinal);
         private static readonly Encoding Utf8 = new UTF8Encoding(false);
+
+        private sealed class StreamEntryModel
+        {
+            public StreamEntryModel(string id, StreamId parsedId, KeyValuePair<string, byte[]>[] fields)
+            {
+                Id = id;
+                ParsedId = parsedId;
+                Fields = fields;
+            }
+
+            public string Id { get; }
+            public StreamId ParsedId { get; }
+            public KeyValuePair<string, byte[]>[] Fields { get; }
+        }
+
+        private readonly struct StreamId : IComparable<StreamId>
+        {
+            public StreamId(long ms, long seq)
+            {
+                Ms = ms;
+                Seq = seq;
+            }
+
+            public long Ms { get; }
+            public long Seq { get; }
+
+            public int CompareTo(StreamId other)
+            {
+                var cmp = Ms.CompareTo(other.Ms);
+                return cmp != 0 ? cmp : Seq.CompareTo(other.Seq);
+            }
+        }
 
         public void Seed(string key, string value)
         {
             _data[key] = Utf8.GetBytes(value);
             _hashes.Remove(key);
+            _streams.Remove(key);
+            _streamLastIds.Remove(key);
             _expirations.Remove(key);
         }
 
@@ -584,6 +729,8 @@ namespace Dredis.Tests
 
             _data[key] = value;
             _hashes.Remove(key);
+            _streams.Remove(key);
+            _streamLastIds.Remove(key);
 
             if (expiration.HasValue)
             {
@@ -614,6 +761,8 @@ namespace Dredis.Tests
             {
                 _data[item.Key] = item.Value;
                 _hashes.Remove(item.Key);
+                _streams.Remove(item.Key);
+                _streamLastIds.Remove(item.Key);
                 _expirations.Remove(item.Key);
             }
 
@@ -625,17 +774,10 @@ namespace Dredis.Tests
             long removed = 0;
             foreach (var key in keys)
             {
-                if (_data.Remove(key))
+                if (RemoveKey(key))
                 {
                     removed++;
                 }
-
-                if (_hashes.Remove(key))
-                {
-                    removed++;
-                }
-
-                _expirations.Remove(key);
             }
 
             return Task.FromResult(removed);
@@ -643,8 +785,7 @@ namespace Dredis.Tests
 
         public Task<bool> ExistsAsync(string key, CancellationToken token = default)
         {
-            var exists = GetValue(key) != null;
-            return Task.FromResult(exists);
+            return Task.FromResult(HasKey(key));
         }
 
         public Task<long> ExistsAsync(string[] keys, CancellationToken token = default)
@@ -652,7 +793,7 @@ namespace Dredis.Tests
             long count = 0;
             foreach (var key in keys)
             {
-                if (GetValue(key) != null)
+                if (HasKey(key))
                 {
                     count++;
                 }
@@ -689,7 +830,7 @@ namespace Dredis.Tests
 
         public Task<bool> ExpireAsync(string key, TimeSpan expiration, CancellationToken token = default)
         {
-            if (GetValue(key) == null)
+            if (!HasKey(key))
             {
                 return Task.FromResult(false);
             }
@@ -700,7 +841,7 @@ namespace Dredis.Tests
 
         public Task<bool> PExpireAsync(string key, TimeSpan expiration, CancellationToken token = default)
         {
-            if (GetValue(key) == null)
+            if (!HasKey(key))
             {
                 return Task.FromResult(false);
             }
@@ -711,7 +852,7 @@ namespace Dredis.Tests
 
         public Task<long> TtlAsync(string key, CancellationToken token = default)
         {
-            if (GetValue(key) == null)
+            if (!HasKey(key))
             {
                 return Task.FromResult(-2L);
             }
@@ -734,7 +875,7 @@ namespace Dredis.Tests
 
         public Task<long> PttlAsync(string key, CancellationToken token = default)
         {
-            if (GetValue(key) == null)
+            if (!HasKey(key))
             {
                 return Task.FromResult(-2L);
             }
@@ -777,6 +918,146 @@ namespace Dredis.Tests
             return Task.FromResult(removed);
         }
 
+        public Task<string?> StreamAddAsync(
+            string key,
+            string id,
+            KeyValuePair<string, byte[]>[] fields,
+            CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+            }
+
+            if (!_streams.TryGetValue(key, out var stream))
+            {
+                stream = new List<StreamEntryModel>();
+                _streams[key] = stream;
+                _data.Remove(key);
+                _hashes.Remove(key);
+            }
+
+            var lastId = _streamLastIds.TryGetValue(key, out var last) ? last : new StreamId(-1, -1);
+            StreamId nextId;
+            string nextIdText;
+
+            if (id == "*")
+            {
+                var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                var seq = lastId.Ms == now ? lastId.Seq + 1 : 0;
+                nextId = new StreamId(now, seq);
+                nextIdText = FormatStreamId(nextId);
+            }
+            else
+            {
+                if (!TryParseStreamId(id, out nextId) || nextId.CompareTo(lastId) <= 0)
+                {
+                    return Task.FromResult<string?>(null);
+                }
+
+                nextIdText = id;
+            }
+
+            stream.Add(new StreamEntryModel(nextIdText, nextId, fields));
+            _streamLastIds[key] = nextId;
+            return Task.FromResult<string?>(nextIdText);
+        }
+
+        public Task<long> StreamDeleteAsync(string key, string[] ids, CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+                return Task.FromResult(0L);
+            }
+
+            if (!_streams.TryGetValue(key, out var stream))
+            {
+                return Task.FromResult(0L);
+            }
+
+            var toRemove = new HashSet<string>(ids, StringComparer.Ordinal);
+            long removed = 0;
+            for (int i = stream.Count - 1; i >= 0; i--)
+            {
+                if (toRemove.Contains(stream[i].Id))
+                {
+                    stream.RemoveAt(i);
+                    removed++;
+                }
+            }
+
+            if (stream.Count == 0)
+            {
+                _streams.Remove(key);
+                _streamLastIds.Remove(key);
+                _expirations.Remove(key);
+            }
+
+            return Task.FromResult(removed);
+        }
+
+        public Task<long> StreamLengthAsync(string key, CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+                return Task.FromResult(0L);
+            }
+
+            return Task.FromResult(_streams.TryGetValue(key, out var stream) ? stream.Count : 0L);
+        }
+
+        public Task<StreamReadResult[]> StreamReadAsync(
+            string[] keys,
+            string[] ids,
+            int? count,
+            CancellationToken token = default)
+        {
+            var results = new List<StreamReadResult>();
+
+            for (int i = 0; i < keys.Length; i++)
+            {
+                var key = keys[i];
+                if (IsExpired(key))
+                {
+                    RemoveKey(key);
+                    continue;
+                }
+
+                if (!_streams.TryGetValue(key, out var stream))
+                {
+                    continue;
+                }
+
+                var startId = ids[i] == "$" && _streamLastIds.TryGetValue(key, out var last)
+                    ? last
+                    : TryParseStreamId(ids[i], out var parsed) ? parsed : new StreamId(-1, -1);
+
+                var entries = new List<StreamEntry>();
+                foreach (var entry in stream)
+                {
+                    if (entry.ParsedId.CompareTo(startId) <= 0)
+                    {
+                        continue;
+                    }
+
+                    entries.Add(new StreamEntry(entry.Id, entry.Fields));
+                    if (count.HasValue && entries.Count >= count.Value)
+                    {
+                        break;
+                    }
+                }
+
+                if (entries.Count > 0)
+                {
+                    results.Add(new StreamReadResult(key, entries.ToArray()));
+                }
+            }
+
+            return Task.FromResult(results.ToArray());
+        }
+
         public Task<bool> HashSetAsync(string key, string field, byte[] value, CancellationToken token = default)
         {
             if (IsExpired(key))
@@ -789,6 +1070,8 @@ namespace Dredis.Tests
                 hash = new Dictionary<string, byte[]>(StringComparer.Ordinal);
                 _hashes[key] = hash;
                 _data.Remove(key);
+                _streams.Remove(key);
+                _streamLastIds.Remove(key);
             }
 
             var isNew = !hash.ContainsKey(field);
@@ -868,6 +1151,12 @@ namespace Dredis.Tests
 
         private byte[]? GetValue(string key)
         {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+                return null;
+            }
+
             if (!_data.TryGetValue(key, out var value))
             {
                 return null;
@@ -887,6 +1176,17 @@ namespace Dredis.Tests
             return null;
         }
 
+        private bool HasKey(string key)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+                return false;
+            }
+
+            return _data.ContainsKey(key) || _hashes.ContainsKey(key) || _streams.ContainsKey(key);
+        }
+
         private bool IsExpired(string key)
         {
             if (!_expirations.TryGetValue(key, out var expiresAt) || expiresAt == null)
@@ -901,8 +1201,33 @@ namespace Dredis.Tests
         {
             var removed = _data.Remove(key);
             removed |= _hashes.Remove(key);
+            removed |= _streams.Remove(key);
+            _streamLastIds.Remove(key);
             _expirations.Remove(key);
             return removed;
+        }
+
+        private static bool TryParseStreamId(string text, out StreamId id)
+        {
+            id = default;
+            var parts = text.Split('-');
+            if (parts.Length != 2)
+            {
+                return false;
+            }
+
+            if (!long.TryParse(parts[0], out var ms) || !long.TryParse(parts[1], out var seq))
+            {
+                return false;
+            }
+
+            id = new StreamId(ms, seq);
+            return true;
+        }
+
+        private static string FormatStreamId(StreamId id)
+        {
+            return $"{id.Ms}-{id.Seq}";
         }
     }
 }

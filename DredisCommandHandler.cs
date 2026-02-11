@@ -129,6 +129,22 @@ namespace Dredis
                     await HandleHGetAllAsync(ctx, elements);
                     break;
 
+                case "XADD":
+                    await HandleXAddAsync(ctx, elements);
+                    break;
+
+                case "XDEL":
+                    await HandleXDelAsync(ctx, elements);
+                    break;
+
+                case "XLEN":
+                    await HandleXLenAsync(ctx, elements);
+                    break;
+
+                case "XREAD":
+                    await HandleXReadAsync(ctx, elements);
+                    break;
+
                 default:
                     WriteError(ctx, $"ERR unknown command '{cmd}'");
                     break;
@@ -729,6 +745,251 @@ namespace Dredis
             }
 
             WriteArray(ctx, children);
+        }
+
+        private async Task HandleXAddAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count < 5 || (args.Count - 3) % 2 != 0)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'xadd' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key) || !TryGetString(args[2], out var id))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            if (id != "*" && !TryParseStreamIdText(id))
+            {
+                WriteError(ctx, "ERR invalid stream id");
+                return;
+            }
+
+            var fields = new KeyValuePair<string, byte[]>[(args.Count - 3) / 2];
+            int index = 0;
+            for (int i = 3; i < args.Count; i += 2)
+            {
+                if (!TryGetString(args[i], out var field))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                if (!TryGetBytes(args[i + 1], out var value))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                fields[index++] = new KeyValuePair<string, byte[]>(field, value);
+            }
+
+            var createdId = await _store.StreamAddAsync(key, id, fields).ConfigureAwait(false);
+            if (createdId == null)
+            {
+                WriteError(ctx, "ERR invalid stream id");
+                return;
+            }
+
+            WriteBulkString(ctx, Utf8.GetBytes(createdId));
+        }
+
+        private async Task HandleXDelAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count < 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'xdel' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var ids = new string[args.Count - 2];
+            for (int i = 2; i < args.Count; i++)
+            {
+                if (!TryGetString(args[i], out var id))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                ids[i - 2] = id;
+            }
+
+            var removed = await _store.StreamDeleteAsync(key, ids).ConfigureAwait(false);
+            WriteInteger(ctx, removed);
+        }
+
+        private async Task HandleXLenAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 2)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'xlen' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var length = await _store.StreamLengthAsync(key).ConfigureAwait(false);
+            WriteInteger(ctx, length);
+        }
+
+        private async Task HandleXReadAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count < 4)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'xread' command");
+                return;
+            }
+
+            int index = 1;
+            int? count = null;
+
+            while (index < args.Count)
+            {
+                if (!TryGetString(args[index], out var option))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                if (string.Equals(option, "STREAMS", StringComparison.OrdinalIgnoreCase))
+                {
+                    break;
+                }
+
+                if (string.Equals(option, "COUNT", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (index + 1 >= args.Count || !TryGetString(args[index + 1], out var countText) ||
+                        !int.TryParse(countText, out var parsed) || parsed <= 0)
+                    {
+                        WriteError(ctx, "ERR invalid count");
+                        return;
+                    }
+
+                    count = parsed;
+                    index += 2;
+                    continue;
+                }
+
+                if (string.Equals(option, "BLOCK", StringComparison.OrdinalIgnoreCase))
+                {
+                    WriteError(ctx, "ERR BLOCK not supported");
+                    return;
+                }
+
+                WriteError(ctx, "ERR syntax error");
+                return;
+            }
+
+            if (index >= args.Count || !TryGetString(args[index], out var streamsKeyword) ||
+                !string.Equals(streamsKeyword, "STREAMS", StringComparison.OrdinalIgnoreCase))
+            {
+                WriteError(ctx, "ERR syntax error");
+                return;
+            }
+
+            int remaining = args.Count - (index + 1);
+            if (remaining < 2 || remaining % 2 != 0)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'xread' command");
+                return;
+            }
+
+            int streamCount = remaining / 2;
+            var keys = new string[streamCount];
+            var ids = new string[streamCount];
+
+            for (int i = 0; i < streamCount; i++)
+            {
+                if (!TryGetString(args[index + 1 + i], out var key) ||
+                    !TryGetString(args[index + 1 + i + streamCount], out var id))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                if (id != "$" && !TryParseStreamIdText(id))
+                {
+                    WriteError(ctx, "ERR invalid stream id");
+                    return;
+                }
+
+                keys[i] = key;
+                ids[i] = id;
+            }
+
+            var results = await _store.StreamReadAsync(keys, ids, count).ConfigureAwait(false);
+            var streamMessages = new List<IRedisMessage>();
+
+            foreach (var result in results)
+            {
+                if (result.Entries.Length == 0)
+                {
+                    continue;
+                }
+
+                var entryMessages = new IRedisMessage[result.Entries.Length];
+                for (int i = 0; i < result.Entries.Length; i++)
+                {
+                    var entry = result.Entries[i];
+                    var fieldChildren = new IRedisMessage[entry.Fields.Length * 2];
+
+                    for (int j = 0; j < entry.Fields.Length; j++)
+                    {
+                        var fieldBytes = Utf8.GetBytes(entry.Fields[j].Key);
+                        fieldChildren[j * 2] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(fieldBytes));
+                        fieldChildren[j * 2 + 1] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(entry.Fields[j].Value));
+                    }
+
+                    var entryChildren = new IRedisMessage[2]
+                    {
+                        new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(entry.Id))),
+                        new ArrayRedisMessage(fieldChildren)
+                    };
+
+                    entryMessages[i] = new ArrayRedisMessage(entryChildren);
+                }
+
+                var streamChildren = new IRedisMessage[2]
+                {
+                    new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(result.Key))),
+                    new ArrayRedisMessage(entryMessages)
+                };
+
+                streamMessages.Add(new ArrayRedisMessage(streamChildren));
+            }
+
+            WriteArray(ctx, streamMessages);
+        }
+
+        private static bool TryParseStreamIdText(string text)
+        {
+            var parts = text.Split('-');
+            if (parts.Length != 2)
+            {
+                return false;
+            }
+
+            return long.TryParse(parts[0], out _) && long.TryParse(parts[1], out _);
         }
 
         private static string GetString(IRedisMessage msg)
