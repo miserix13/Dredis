@@ -149,6 +149,10 @@ namespace Dredis
                     await HandleXRangeAsync(ctx, elements);
                     break;
 
+                case "XGROUP":
+                    await HandleXGroupAsync(ctx, elements);
+                    break;
+
                 default:
                     WriteError(ctx, $"ERR unknown command '{cmd}'");
                     break;
@@ -1051,6 +1055,120 @@ namespace Dredis
             WriteArray(ctx, entryMessages);
         }
 
+        private async Task HandleXGroupAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count < 2 || !TryGetString(args[1], out var subcommand))
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'xgroup' command");
+                return;
+            }
+
+            switch (subcommand.ToUpperInvariant())
+            {
+                case "CREATE":
+                    await HandleXGroupCreateAsync(ctx, args);
+                    break;
+
+                case "DESTROY":
+                    await HandleXGroupDestroyAsync(ctx, args);
+                    break;
+
+                default:
+                    WriteError(ctx, "ERR unknown subcommand or wrong number of arguments for 'xgroup' command");
+                    break;
+            }
+        }
+
+        private async Task HandleXGroupCreateAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 5 && args.Count != 6)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'xgroup create' command");
+                return;
+            }
+
+            if (!TryGetString(args[2], out var key) ||
+                !TryGetString(args[3], out var group) ||
+                !TryGetString(args[4], out var id))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            bool mkStream = false;
+            if (args.Count == 6)
+            {
+                if (!TryGetString(args[5], out var option) ||
+                    !string.Equals(option, "MKSTREAM", StringComparison.OrdinalIgnoreCase))
+                {
+                    WriteError(ctx, "ERR syntax error");
+                    return;
+                }
+
+                mkStream = true;
+            }
+
+            if (!IsGroupCreateId(id))
+            {
+                WriteError(ctx, "ERR invalid stream id");
+                return;
+            }
+
+            var result = await _store.StreamGroupCreateAsync(key, group, id, mkStream).ConfigureAwait(false);
+            switch (result)
+            {
+                case StreamGroupCreateResult.Ok:
+                    WriteSimpleString(ctx, "OK");
+                    break;
+
+                case StreamGroupCreateResult.Exists:
+                    WriteError(ctx, "BUSYGROUP Consumer Group name already exists");
+                    break;
+
+                case StreamGroupCreateResult.NoStream:
+                    WriteError(ctx, "ERR The XGROUP subcommand requires the key to exist");
+                    break;
+
+                case StreamGroupCreateResult.WrongType:
+                    WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                    break;
+
+                default:
+                    WriteError(ctx, "ERR invalid stream id");
+                    break;
+            }
+        }
+
+        private async Task HandleXGroupDestroyAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 4)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'xgroup destroy' command");
+                return;
+            }
+
+            if (!TryGetString(args[2], out var key) || !TryGetString(args[3], out var group))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var result = await _store.StreamGroupDestroyAsync(key, group).ConfigureAwait(false);
+            if (result == StreamGroupDestroyResult.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            WriteInteger(ctx, result == StreamGroupDestroyResult.Removed ? 1 : 0);
+        }
+
         private static bool TryParseStreamIdText(string text)
         {
             var parts = text.Split('-');
@@ -1065,6 +1183,11 @@ namespace Dredis
         private static bool IsRangeId(string text)
         {
             return text == "-" || text == "+" || TryParseStreamIdText(text);
+        }
+
+        private static bool IsGroupCreateId(string text)
+        {
+            return text == "-" || text == "$" || TryParseStreamIdText(text);
         }
 
         private static string GetString(IRedisMessage msg)

@@ -601,10 +601,10 @@ namespace Dredis.Tests
 
                 var response = ReadOutbound(channel);
                 var array = Assert.IsType<ArrayRedisMessage>(response);
-                Assert.Equal(2, array.Children.Count);
+                Assert.Collection(array.Children, _ => { }, _ => { });
 
                 var entries = GetStreamEntries(array.Children);
-                Assert.Equal(2, entries.Count);
+                Assert.True(entries.Count == 2);
                 Assert.Equal("1", entries[firstId]["a"]);
                 Assert.Equal("2", entries[secondId]["b"]);
             }
@@ -640,6 +640,98 @@ namespace Dredis.Tests
                 var entries = GetStreamEntries(array.Children);
                 Assert.Single(entries);
                 Assert.True(entries.ContainsKey(firstId));
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task XGroupCreate_MkStream_CreatesGroup()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("XGROUP", "CREATE", "stream", "group", "$", "MKSTREAM"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var ok = Assert.IsType<SimpleStringRedisMessage>(response);
+                Assert.Equal("OK", ok.Content);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task XGroupCreate_WithoutStream_ReturnsError()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("XGROUP", "CREATE", "stream", "group", "$"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var error = Assert.IsType<ErrorRedisMessage>(response);
+                Assert.Equal("ERR The XGROUP subcommand requires the key to exist", error.Content);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task XGroupCreate_Duplicate_ReturnsBusyGroup()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("XGROUP", "CREATE", "stream", "group", "$", "MKSTREAM"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("XGROUP", "CREATE", "stream", "group", "$"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var error = Assert.IsType<ErrorRedisMessage>(response);
+                Assert.Equal("BUSYGROUP Consumer Group name already exists", error.Content);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task XGroupDestroy_RemovesGroup_ReturnsCount()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("XGROUP", "CREATE", "stream", "group", "$", "MKSTREAM"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("XGROUP", "DESTROY", "stream", "group"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var removed = Assert.IsType<IntegerRedisMessage>(response);
+                Assert.Equal(1, removed.Value);
             }
             finally
             {
@@ -726,6 +818,7 @@ namespace Dredis.Tests
         private readonly Dictionary<string, Dictionary<string, byte[]>> _hashes = new(StringComparer.Ordinal);
         private readonly Dictionary<string, List<StreamEntryModel>> _streams = new(StringComparer.Ordinal);
         private readonly Dictionary<string, StreamId> _streamLastIds = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, Dictionary<string, StreamGroupState>> _streamGroups = new(StringComparer.Ordinal);
         private readonly Dictionary<string, DateTimeOffset?> _expirations = new(StringComparer.Ordinal);
         private static readonly Encoding Utf8 = new UTF8Encoding(false);
 
@@ -741,6 +834,16 @@ namespace Dredis.Tests
             public string Id { get; }
             public StreamId ParsedId { get; }
             public KeyValuePair<string, byte[]>[] Fields { get; }
+        }
+
+        private sealed class StreamGroupState
+        {
+            public StreamGroupState(StreamId lastDeliveredId)
+            {
+                LastDeliveredId = lastDeliveredId;
+            }
+
+            public StreamId LastDeliveredId { get; }
         }
 
         private readonly struct StreamId : IComparable<StreamId>
@@ -767,6 +870,7 @@ namespace Dredis.Tests
             _hashes.Remove(key);
             _streams.Remove(key);
             _streamLastIds.Remove(key);
+            _streamGroups.Remove(key);
             _expirations.Remove(key);
         }
 
@@ -798,6 +902,7 @@ namespace Dredis.Tests
             _hashes.Remove(key);
             _streams.Remove(key);
             _streamLastIds.Remove(key);
+            _streamGroups.Remove(key);
 
             if (expiration.HasValue)
             {
@@ -830,6 +935,7 @@ namespace Dredis.Tests
                 _hashes.Remove(item.Key);
                 _streams.Remove(item.Key);
                 _streamLastIds.Remove(item.Key);
+                _streamGroups.Remove(item.Key);
                 _expirations.Remove(item.Key);
             }
 
@@ -1058,6 +1164,7 @@ namespace Dredis.Tests
             {
                 _streams.Remove(key);
                 _streamLastIds.Remove(key);
+                _streamGroups.Remove(key);
                 _expirations.Remove(key);
             }
 
@@ -1125,6 +1232,90 @@ namespace Dredis.Tests
             return Task.FromResult(results.ToArray());
         }
 
+        public Task<StreamGroupCreateResult> StreamGroupCreateAsync(
+            string key,
+            string group,
+            string startId,
+            bool mkStream,
+            CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key))
+            {
+                return Task.FromResult(StreamGroupCreateResult.WrongType);
+            }
+
+            var streamExists = _streams.TryGetValue(key, out var stream);
+            if (!streamExists && !mkStream)
+            {
+                return Task.FromResult(StreamGroupCreateResult.NoStream);
+            }
+
+            if (!streamExists)
+            {
+                stream = new List<StreamEntryModel>();
+                _streams[key] = stream;
+                _streamLastIds.Remove(key);
+            }
+
+            if (!_streamGroups.TryGetValue(key, out var groups))
+            {
+                groups = new Dictionary<string, StreamGroupState>(StringComparer.Ordinal);
+                _streamGroups[key] = groups;
+            }
+
+            if (groups.ContainsKey(group))
+            {
+                return Task.FromResult(StreamGroupCreateResult.Exists);
+            }
+
+            if (!TryResolveGroupStartId(key, stream, startId, out var lastId))
+            {
+                return Task.FromResult(StreamGroupCreateResult.InvalidId);
+            }
+
+            groups[group] = new StreamGroupState(lastId);
+            return Task.FromResult(StreamGroupCreateResult.Ok);
+        }
+
+        public Task<StreamGroupDestroyResult> StreamGroupDestroyAsync(
+            string key,
+            string group,
+            CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+                return Task.FromResult(StreamGroupDestroyResult.NotFound);
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key))
+            {
+                return Task.FromResult(StreamGroupDestroyResult.WrongType);
+            }
+
+            if (!_streamGroups.TryGetValue(key, out var groups))
+            {
+                return Task.FromResult(StreamGroupDestroyResult.NotFound);
+            }
+
+            if (!groups.Remove(group))
+            {
+                return Task.FromResult(StreamGroupDestroyResult.NotFound);
+            }
+
+            if (groups.Count == 0)
+            {
+                _streamGroups.Remove(key);
+            }
+
+            return Task.FromResult(StreamGroupDestroyResult.Removed);
+        }
+
         public Task<StreamEntry[]> StreamRangeAsync(
             string key,
             string start,
@@ -1188,6 +1379,7 @@ namespace Dredis.Tests
                 _data.Remove(key);
                 _streams.Remove(key);
                 _streamLastIds.Remove(key);
+                _streamGroups.Remove(key);
             }
 
             var isNew = !hash.ContainsKey(field);
@@ -1319,6 +1511,7 @@ namespace Dredis.Tests
             removed |= _hashes.Remove(key);
             removed |= _streams.Remove(key);
             _streamLastIds.Remove(key);
+            _streamGroups.Remove(key);
             _expirations.Remove(key);
             return removed;
         }
@@ -1344,6 +1537,36 @@ namespace Dredis.Tests
         private static string FormatStreamId(StreamId id)
         {
             return $"{id.Ms}-{id.Seq}";
+        }
+
+        private bool TryResolveGroupStartId(
+            string key,
+            List<StreamEntryModel> stream,
+            string startId,
+            out StreamId lastId)
+        {
+            lastId = new StreamId(-1, -1);
+
+            if (startId == "-")
+            {
+                return true;
+            }
+
+            if (startId == "$")
+            {
+                if (_streamLastIds.TryGetValue(key, out var lastStreamId))
+                {
+                    lastId = lastStreamId;
+                }
+                else if (stream.Count > 0)
+                {
+                    lastId = stream[stream.Count - 1].ParsedId;
+                }
+
+                return true;
+            }
+
+            return TryParseStreamId(startId, out lastId);
         }
     }
 }

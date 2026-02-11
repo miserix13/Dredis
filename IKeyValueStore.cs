@@ -33,6 +33,22 @@ namespace Dredis
         public StreamEntry[] Entries { get; }
     }
 
+    public enum StreamGroupCreateResult
+    {
+        Ok,
+        Exists,
+        NoStream,
+        WrongType,
+        InvalidId
+    }
+
+    public enum StreamGroupDestroyResult
+    {
+        Removed,
+        NotFound,
+        WrongType
+    }
+
     /// <summary>
     /// Key-Value Storage abstraction for Dredis.
     /// </summary>
@@ -258,6 +274,34 @@ namespace Dredis
             string start,
             string end,
             int? count,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Creates a consumer group for a stream.
+        /// </summary>
+        /// <param name="key">The stream key.</param>
+        /// <param name="group">The consumer group name.</param>
+        /// <param name="startId">The start id, '-' or '$'.</param>
+        /// <param name="mkStream">Creates the stream if it does not exist.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result describes the create outcome.</returns>
+        Task<StreamGroupCreateResult> StreamGroupCreateAsync(
+            string key,
+            string group,
+            string startId,
+            bool mkStream,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Destroys a consumer group for a stream.
+        /// </summary>
+        /// <param name="key">The stream key.</param>
+        /// <param name="group">The consumer group name.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result describes the destroy outcome.</returns>
+        Task<StreamGroupDestroyResult> StreamGroupDestroyAsync(
+            string key,
+            string group,
             CancellationToken token = default);
         /// <summary>
         /// Asynchronously removes all expired keys from the cache.
