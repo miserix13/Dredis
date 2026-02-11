@@ -540,7 +540,7 @@ namespace Dredis.Tests
                 var entriesMessage = Assert.IsType<ArrayRedisMessage>(streamMessage.Children[1]);
                 var entries = GetStreamEntries(entriesMessage.Children);
 
-                Assert.Equal(1, entries.Count);
+                Assert.Single(entries);
                 using var enumerator = entries.GetEnumerator();
                 Assert.True(enumerator.MoveNext());
                 Assert.Equal("2", enumerator.Current.Value["b"]);
@@ -573,6 +573,73 @@ namespace Dredis.Tests
                 var response = ReadOutbound(channel);
                 var removed = Assert.IsType<IntegerRedisMessage>(response);
                 Assert.Equal(2, removed.Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task XRange_ReturnsEntriesInRange()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("XADD", "stream", "*", "a", "1"));
+                channel.RunPendingTasks();
+                var firstId = GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel)));
+
+                channel.WriteInbound(Command("XADD", "stream", "*", "b", "2"));
+                channel.RunPendingTasks();
+                var secondId = GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel)));
+
+                channel.WriteInbound(Command("XRANGE", "stream", firstId, secondId));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var array = Assert.IsType<ArrayRedisMessage>(response);
+                Assert.Equal(2, array.Children.Count);
+
+                var entries = GetStreamEntries(array.Children);
+                Assert.Equal(2, entries.Count);
+                Assert.Equal("1", entries[firstId]["a"]);
+                Assert.Equal("2", entries[secondId]["b"]);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task XRange_Count_LimitsEntries()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("XADD", "stream", "*", "a", "1"));
+                channel.RunPendingTasks();
+                var firstId = GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel)));
+
+                channel.WriteInbound(Command("XADD", "stream", "*", "b", "2"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("XRANGE", "stream", "-", "+", "COUNT", "1"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var array = Assert.IsType<ArrayRedisMessage>(response);
+                Assert.Single(array.Children);
+
+                var entries = GetStreamEntries(array.Children);
+                Assert.Single(entries);
+                Assert.True(entries.ContainsKey(firstId));
             }
             finally
             {
@@ -1056,6 +1123,55 @@ namespace Dredis.Tests
             }
 
             return Task.FromResult(results.ToArray());
+        }
+
+        public Task<StreamEntry[]> StreamRangeAsync(
+            string key,
+            string start,
+            string end,
+            int? count,
+            CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+                return Task.FromResult(Array.Empty<StreamEntry>());
+            }
+
+            if (!_streams.TryGetValue(key, out var stream))
+            {
+                return Task.FromResult(Array.Empty<StreamEntry>());
+            }
+
+            var startId = start == "-" ? new StreamId(-1, -1) : TryParseStreamId(start, out var parsedStart)
+                ? parsedStart
+                : new StreamId(-1, -1);
+
+            var endId = end == "+" ? new StreamId(long.MaxValue, long.MaxValue) : TryParseStreamId(end, out var parsedEnd)
+                ? parsedEnd
+                : new StreamId(long.MaxValue, long.MaxValue);
+
+            var entries = new List<StreamEntry>();
+            foreach (var entry in stream)
+            {
+                if (entry.ParsedId.CompareTo(startId) < 0)
+                {
+                    continue;
+                }
+
+                if (entry.ParsedId.CompareTo(endId) > 0)
+                {
+                    break;
+                }
+
+                entries.Add(new StreamEntry(entry.Id, entry.Fields));
+                if (count.HasValue && entries.Count >= count.Value)
+                {
+                    break;
+                }
+            }
+
+            return Task.FromResult(entries.ToArray());
         }
 
         public Task<bool> HashSetAsync(string key, string field, byte[] value, CancellationToken token = default)

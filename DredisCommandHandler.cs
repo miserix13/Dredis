@@ -145,6 +145,10 @@ namespace Dredis
                     await HandleXReadAsync(ctx, elements);
                     break;
 
+                case "XRANGE":
+                    await HandleXRangeAsync(ctx, elements);
+                    break;
+
                 default:
                     WriteError(ctx, $"ERR unknown command '{cmd}'");
                     break;
@@ -981,6 +985,72 @@ namespace Dredis
             WriteArray(ctx, streamMessages);
         }
 
+        private async Task HandleXRangeAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 4 && args.Count != 6)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'xrange' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key) ||
+                !TryGetString(args[2], out var start) ||
+                !TryGetString(args[3], out var end))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            if (!IsRangeId(start) || !IsRangeId(end))
+            {
+                WriteError(ctx, "ERR invalid stream id");
+                return;
+            }
+
+            int? count = null;
+            if (args.Count == 6)
+            {
+                if (!TryGetString(args[4], out var countOption) ||
+                    !string.Equals(countOption, "COUNT", StringComparison.OrdinalIgnoreCase) ||
+                    !TryGetString(args[5], out var countText) ||
+                    !int.TryParse(countText, out var parsed) || parsed <= 0)
+                {
+                    WriteError(ctx, "ERR syntax error");
+                    return;
+                }
+
+                count = parsed;
+            }
+
+            var entries = await _store.StreamRangeAsync(key, start, end, count).ConfigureAwait(false);
+            var entryMessages = new IRedisMessage[entries.Length];
+
+            for (int i = 0; i < entries.Length; i++)
+            {
+                var entry = entries[i];
+                var fieldChildren = new IRedisMessage[entry.Fields.Length * 2];
+
+                for (int j = 0; j < entry.Fields.Length; j++)
+                {
+                    var fieldBytes = Utf8.GetBytes(entry.Fields[j].Key);
+                    fieldChildren[j * 2] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(fieldBytes));
+                    fieldChildren[j * 2 + 1] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(entry.Fields[j].Value));
+                }
+
+                var entryChildren = new IRedisMessage[2]
+                {
+                    new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(entry.Id))),
+                    new ArrayRedisMessage(fieldChildren)
+                };
+
+                entryMessages[i] = new ArrayRedisMessage(entryChildren);
+            }
+
+            WriteArray(ctx, entryMessages);
+        }
+
         private static bool TryParseStreamIdText(string text)
         {
             var parts = text.Split('-');
@@ -990,6 +1060,11 @@ namespace Dredis
             }
 
             return long.TryParse(parts[0], out _) && long.TryParse(parts[1], out _);
+        }
+
+        private static bool IsRangeId(string text)
+        {
+            return text == "-" || text == "+" || TryParseStreamIdText(text);
         }
 
         private static string GetString(IRedisMessage msg)
