@@ -1,5 +1,6 @@
 using System.Text;
 using DotNetty.Buffers;
+using DotNetty.Codecs.Redis;
 using DotNetty.Codecs.Redis.Messages;
 using DotNetty.Transport.Channels;
 
@@ -20,7 +21,7 @@ namespace Dredis
 
         protected override void ChannelRead0(IChannelHandlerContext ctx, IRedisMessage msg)
         {
-            if (msg is IRedisArrayMessage array)
+            if (msg is IArrayRedisMessage array)
             {
                 _ = HandleCommandAsync(ctx, array);
             }
@@ -30,7 +31,7 @@ namespace Dredis
             }
         }
 
-        private async Task HandleCommandAsync(IChannelHandlerContext ctx, IRedisArrayMessage array)
+        private async Task HandleCommandAsync(IChannelHandlerContext ctx, IArrayRedisMessage array)
         {
             var elements = array.Children;
             if (elements == null || elements.Count == 0)
@@ -215,13 +216,14 @@ namespace Dredis
         {
             switch (msg)
             {
-                case IRedisBulkStringMessage bulk when bulk.Content != null:
-                    return Utf8.GetString(
-                        bulk.Content.Array!,
-                        bulk.Content.ArrayOffset,
-                        bulk.Content.Count);
+                case FullBulkStringRedisMessage bulk when bulk.Content != null:
+                    // ReadableBytes provides the length of the readable data in the buffer.
+                    var length = bulk.Content.ReadableBytes;
+                    var tmp = new byte[length];
+                    bulk.Content.GetBytes(bulk.Content.ReaderIndex, tmp, 0, length);
+                    return Utf8.GetString(tmp, 0, length);
 
-                case IRedisSimpleStringMessage simple:
+                case SimpleStringRedisMessage simple:
                     return simple.Content;
 
                 default:
@@ -233,17 +235,13 @@ namespace Dredis
         {
             switch (msg)
             {
-                case IRedisBulkStringMessage bulk when bulk.Content != null:
-                    var buffer = new byte[bulk.Content.Count];
-                    Buffer.BlockCopy(
-                        bulk.Content.Array!,
-                        bulk.Content.ArrayOffset,
-                        buffer,
-                        0,
-                        bulk.Content.Count);
+                case FullBulkStringRedisMessage bulk when bulk.Content != null:
+                    var length = bulk.Content.ReadableBytes;
+                    var buffer = new byte[length];
+                    bulk.Content.GetBytes(bulk.Content.ReaderIndex, buffer, 0, length);
                     return buffer;
 
-                case IRedisSimpleStringMessage simple:
+                case SimpleStringRedisMessage simple:
                     return Utf8.GetBytes(simple.Content);
 
                 default:
