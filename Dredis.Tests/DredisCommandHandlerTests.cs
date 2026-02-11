@@ -739,6 +739,81 @@ namespace Dredis.Tests
             }
         }
 
+        [Fact]
+        public async Task XReadGroup_ReturnsEntriesAndAckRemovesPending()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("XGROUP", "CREATE", "stream", "group", "-", "MKSTREAM"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("XADD", "stream", "*", "a", "1"));
+                channel.RunPendingTasks();
+                var id = GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel)));
+
+                channel.WriteInbound(Command("XREADGROUP", "GROUP", "group", "consumer", "STREAMS", "stream", ">"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var array = Assert.IsType<ArrayRedisMessage>(response);
+                Assert.Single(array.Children);
+
+                var streamMessage = Assert.IsType<ArrayRedisMessage>(array.Children[0]);
+                var entriesMessage = Assert.IsType<ArrayRedisMessage>(streamMessage.Children[1]);
+                var entries = GetStreamEntries(entriesMessage.Children);
+                Assert.True(entries.ContainsKey(id));
+
+                channel.WriteInbound(Command("XACK", "stream", "group", id));
+                channel.RunPendingTasks();
+
+                var ackResponse = ReadOutbound(channel);
+                var ackCount = Assert.IsType<IntegerRedisMessage>(ackResponse);
+                Assert.Equal(1, ackCount.Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task XReadGroup_Block_WaitsForEntry()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("XGROUP", "CREATE", "stream", "group", "-", "MKSTREAM"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("XREADGROUP", "GROUP", "group", "consumer", "BLOCK", "50", "STREAMS", "stream", ">"));
+                channel.RunPendingTasks();
+
+                await Task.Delay(10);
+
+                channel.WriteInbound(Command("XADD", "stream", "*", "a", "1"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                await Task.Delay(60);
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var array = Assert.IsType<ArrayRedisMessage>(response);
+                Assert.Single(array.Children);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
         private static IRedisMessage ReadOutbound(EmbeddedChannel channel)
         {
             channel.RunPendingTasks();
@@ -841,9 +916,11 @@ namespace Dredis.Tests
             public StreamGroupState(StreamId lastDeliveredId)
             {
                 LastDeliveredId = lastDeliveredId;
+                Pending = new HashSet<string>(StringComparer.Ordinal);
             }
 
-            public StreamId LastDeliveredId { get; }
+            public StreamId LastDeliveredId { get; set; }
+            public HashSet<string> Pending { get; }
         }
 
         private readonly struct StreamId : IComparable<StreamId>
@@ -1316,6 +1393,75 @@ namespace Dredis.Tests
             return Task.FromResult(StreamGroupDestroyResult.Removed);
         }
 
+        public async Task<StreamGroupReadResult> StreamGroupReadAsync(
+            string group,
+            string consumer,
+            string[] keys,
+            string[] ids,
+            int? count,
+            TimeSpan? block,
+            CancellationToken token = default)
+        {
+            var initial = TryReadGroup(group, keys, ids, count, allowBlock: false, out var status, out var results);
+            if (initial)
+            {
+                return new StreamGroupReadResult(status, results);
+            }
+
+            if (status != StreamGroupReadResultStatus.Ok)
+            {
+                return new StreamGroupReadResult(status, Array.Empty<StreamReadResult>());
+            }
+
+            if (block.HasValue && block.Value > TimeSpan.Zero)
+            {
+                await Task.Delay(block.Value, token);
+                _ = TryReadGroup(group, keys, ids, count, allowBlock: true, out status, out results);
+                return new StreamGroupReadResult(status, results);
+            }
+
+            return new StreamGroupReadResult(StreamGroupReadResultStatus.Ok, Array.Empty<StreamReadResult>());
+        }
+
+        public Task<StreamAckResult> StreamAckAsync(
+            string key,
+            string group,
+            string[] ids,
+            CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+                return Task.FromResult(new StreamAckResult(StreamAckResultStatus.NoStream, 0));
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key))
+            {
+                return Task.FromResult(new StreamAckResult(StreamAckResultStatus.WrongType, 0));
+            }
+
+            if (!_streams.ContainsKey(key))
+            {
+                return Task.FromResult(new StreamAckResult(StreamAckResultStatus.NoStream, 0));
+            }
+
+            if (!_streamGroups.TryGetValue(key, out var groups) || !groups.TryGetValue(group, out var state))
+            {
+                return Task.FromResult(new StreamAckResult(StreamAckResultStatus.NoGroup, 0));
+            }
+
+            long removed = 0;
+            foreach (var id in ids)
+            {
+                if (state.Pending.Remove(id))
+                {
+                    removed++;
+                }
+            }
+
+            return Task.FromResult(new StreamAckResult(StreamAckResultStatus.Ok, removed));
+        }
+
         public Task<StreamEntry[]> StreamRangeAsync(
             string key,
             string start,
@@ -1567,6 +1713,121 @@ namespace Dredis.Tests
             }
 
             return TryParseStreamId(startId, out lastId);
+        }
+
+        private bool TryReadGroup(
+            string group,
+            string[] keys,
+            string[] ids,
+            int? count,
+            bool allowBlock,
+            out StreamGroupReadResultStatus status,
+            out StreamReadResult[] results)
+        {
+            status = StreamGroupReadResultStatus.Ok;
+            var output = new List<StreamReadResult>();
+
+            for (int i = 0; i < keys.Length; i++)
+            {
+                var key = keys[i];
+                if (IsExpired(key))
+                {
+                    RemoveKey(key);
+                    status = StreamGroupReadResultStatus.NoStream;
+                    results = Array.Empty<StreamReadResult>();
+                    return true;
+                }
+
+                if (_data.ContainsKey(key) || _hashes.ContainsKey(key))
+                {
+                    status = StreamGroupReadResultStatus.WrongType;
+                    results = Array.Empty<StreamReadResult>();
+                    return true;
+                }
+
+                if (!_streams.TryGetValue(key, out var stream))
+                {
+                    status = StreamGroupReadResultStatus.NoStream;
+                    results = Array.Empty<StreamReadResult>();
+                    return true;
+                }
+
+                if (!_streamGroups.TryGetValue(key, out var groups) || !groups.TryGetValue(group, out var state))
+                {
+                    status = StreamGroupReadResultStatus.NoGroup;
+                    results = Array.Empty<StreamReadResult>();
+                    return true;
+                }
+
+                if (!TryResolveReadStartId(ids[i], state, out var startId, out var usePending))
+                {
+                    status = StreamGroupReadResultStatus.InvalidId;
+                    results = Array.Empty<StreamReadResult>();
+                    return true;
+                }
+
+                var entries = new List<StreamEntry>();
+                foreach (var entry in stream)
+                {
+                    if (usePending)
+                    {
+                        if (!state.Pending.Contains(entry.Id))
+                        {
+                            continue;
+                        }
+                    }
+
+                    if (entry.ParsedId.CompareTo(startId) <= 0)
+                    {
+                        continue;
+                    }
+
+                    entries.Add(new StreamEntry(entry.Id, entry.Fields));
+                    if (!usePending)
+                    {
+                        state.Pending.Add(entry.Id);
+                    }
+
+                    if (count.HasValue && entries.Count >= count.Value)
+                    {
+                        break;
+                    }
+                }
+
+                if (entries.Count > 0)
+                {
+                    if (!usePending)
+                    {
+                        var lastEntry = entries[entries.Count - 1];
+                        if (TryParseStreamId(lastEntry.Id, out var parsed))
+                        {
+                            state.LastDeliveredId = parsed;
+                        }
+                    }
+
+                    output.Add(new StreamReadResult(key, entries.ToArray()));
+                }
+            }
+
+            results = output.ToArray();
+            return results.Length > 0 || allowBlock;
+        }
+
+        private static bool TryResolveReadStartId(
+            string id,
+            StreamGroupState state,
+            out StreamId startId,
+            out bool usePending)
+        {
+            usePending = false;
+            if (id == ">")
+            {
+                startId = state.LastDeliveredId;
+                return true;
+            }
+
+            usePending = true;
+            return TryParseStreamId(id, out startId);
         }
     }
 }

@@ -49,6 +49,47 @@ namespace Dredis
         WrongType
     }
 
+    public enum StreamGroupReadResultStatus
+    {
+        Ok,
+        NoGroup,
+        NoStream,
+        WrongType,
+        InvalidId
+    }
+
+    public enum StreamAckResultStatus
+    {
+        Ok,
+        NoGroup,
+        NoStream,
+        WrongType
+    }
+
+    public sealed class StreamGroupReadResult
+    {
+        public StreamGroupReadResult(StreamGroupReadResultStatus status, StreamReadResult[] results)
+        {
+            Status = status;
+            Results = results;
+        }
+
+        public StreamGroupReadResultStatus Status { get; }
+        public StreamReadResult[] Results { get; }
+    }
+
+    public sealed class StreamAckResult
+    {
+        public StreamAckResult(StreamAckResultStatus status, long count)
+        {
+            Status = status;
+            Count = count;
+        }
+
+        public StreamAckResultStatus Status { get; }
+        public long Count { get; }
+    }
+
     /// <summary>
     /// Key-Value Storage abstraction for Dredis.
     /// </summary>
@@ -302,6 +343,40 @@ namespace Dredis
         Task<StreamGroupDestroyResult> StreamGroupDestroyAsync(
             string key,
             string group,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Reads entries for a consumer group.
+        /// </summary>
+        /// <param name="group">The consumer group name.</param>
+        /// <param name="consumer">The consumer name.</param>
+        /// <param name="keys">Stream keys to read.</param>
+        /// <param name="ids">Ids to read (one per key). Use ">" for new messages.</param>
+        /// <param name="count">Optional per-stream count limit.</param>
+        /// <param name="block">Optional blocking timeout.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains status and entries.</returns>
+        Task<StreamGroupReadResult> StreamGroupReadAsync(
+            string group,
+            string consumer,
+            string[] keys,
+            string[] ids,
+            int? count,
+            TimeSpan? block,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Acknowledges entries in a consumer group.
+        /// </summary>
+        /// <param name="key">The stream key.</param>
+        /// <param name="group">The consumer group name.</param>
+        /// <param name="ids">Entry ids to acknowledge.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains status and count.</returns>
+        Task<StreamAckResult> StreamAckAsync(
+            string key,
+            string group,
+            string[] ids,
             CancellationToken token = default);
         /// <summary>
         /// Asynchronously removes all expired keys from the cache.

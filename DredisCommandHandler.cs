@@ -153,6 +153,14 @@ namespace Dredis
                     await HandleXGroupAsync(ctx, elements);
                     break;
 
+                case "XREADGROUP":
+                    await HandleXReadGroupAsync(ctx, elements);
+                    break;
+
+                case "XACK":
+                    await HandleXAckAsync(ctx, elements);
+                    break;
+
                 default:
                     WriteError(ctx, $"ERR unknown command '{cmd}'");
                     break;
@@ -1169,6 +1177,238 @@ namespace Dredis
             WriteInteger(ctx, result == StreamGroupDestroyResult.Removed ? 1 : 0);
         }
 
+        private async Task HandleXReadGroupAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count < 6)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'xreadgroup' command");
+                return;
+            }
+
+            int index = 1;
+            int? count = null;
+            TimeSpan? block = null;
+            string? group = null;
+            string? consumer = null;
+
+            while (index < args.Count)
+            {
+                if (!TryGetString(args[index], out var token))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                if (string.Equals(token, "GROUP", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (index + 2 >= args.Count ||
+                        !TryGetString(args[index + 1], out var groupName) ||
+                        !TryGetString(args[index + 2], out var consumerName))
+                    {
+                        WriteError(ctx, "ERR syntax error");
+                        return;
+                    }
+
+                    group = groupName;
+                    consumer = consumerName;
+                    index += 3;
+                    continue;
+                }
+
+                if (string.Equals(token, "COUNT", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (index + 1 >= args.Count ||
+                        !TryGetString(args[index + 1], out var countText) ||
+                        !int.TryParse(countText, out var parsed) || parsed <= 0)
+                    {
+                        WriteError(ctx, "ERR invalid count");
+                        return;
+                    }
+
+                    count = parsed;
+                    index += 2;
+                    continue;
+                }
+
+                if (string.Equals(token, "BLOCK", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (index + 1 >= args.Count ||
+                        !TryGetString(args[index + 1], out var blockText) ||
+                        !long.TryParse(blockText, out var ms) || ms < 0)
+                    {
+                        WriteError(ctx, "ERR invalid block" );
+                        return;
+                    }
+
+                    block = TimeSpan.FromMilliseconds(ms);
+                    index += 2;
+                    continue;
+                }
+
+                if (string.Equals(token, "STREAMS", StringComparison.OrdinalIgnoreCase))
+                {
+                    break;
+                }
+
+                WriteError(ctx, "ERR syntax error");
+                return;
+            }
+
+            if (group == null || consumer == null)
+            {
+                WriteError(ctx, "ERR syntax error");
+                return;
+            }
+
+            if (index >= args.Count || !TryGetString(args[index], out var streamsKeyword) ||
+                !string.Equals(streamsKeyword, "STREAMS", StringComparison.OrdinalIgnoreCase))
+            {
+                WriteError(ctx, "ERR syntax error");
+                return;
+            }
+
+            int remaining = args.Count - (index + 1);
+            if (remaining < 2 || remaining % 2 != 0)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'xreadgroup' command");
+                return;
+            }
+
+            int streamCount = remaining / 2;
+            var keys = new string[streamCount];
+            var ids = new string[streamCount];
+
+            for (int i = 0; i < streamCount; i++)
+            {
+                if (!TryGetString(args[index + 1 + i], out var key) ||
+                    !TryGetString(args[index + 1 + i + streamCount], out var id))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                if (id != ">" && !TryParseStreamIdText(id))
+                {
+                    WriteError(ctx, "ERR invalid stream id");
+                    return;
+                }
+
+                keys[i] = key;
+                ids[i] = id;
+            }
+
+            var result = await _store.StreamGroupReadAsync(group, consumer, keys, ids, count, block).ConfigureAwait(false);
+            switch (result.Status)
+            {
+                case StreamGroupReadResultStatus.WrongType:
+                    WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                    return;
+
+                case StreamGroupReadResultStatus.NoStream:
+                    WriteError(ctx, "ERR The XREADGROUP subcommand requires the key to exist");
+                    return;
+
+                case StreamGroupReadResultStatus.NoGroup:
+                    WriteError(ctx, "NOGROUP No such consumer group");
+                    return;
+
+                case StreamGroupReadResultStatus.InvalidId:
+                    WriteError(ctx, "ERR invalid stream id");
+                    return;
+            }
+
+            if (result.Results.Length == 0)
+            {
+                WriteNullArray(ctx);
+                return;
+            }
+
+            var streamMessages = new List<IRedisMessage>();
+            foreach (var stream in result.Results)
+            {
+                var entryMessages = new IRedisMessage[stream.Entries.Length];
+                for (int i = 0; i < stream.Entries.Length; i++)
+                {
+                    var entry = stream.Entries[i];
+                    var fieldChildren = new IRedisMessage[entry.Fields.Length * 2];
+
+                    for (int j = 0; j < entry.Fields.Length; j++)
+                    {
+                        var fieldBytes = Utf8.GetBytes(entry.Fields[j].Key);
+                        fieldChildren[j * 2] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(fieldBytes));
+                        fieldChildren[j * 2 + 1] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(entry.Fields[j].Value));
+                    }
+
+                    var entryChildren = new IRedisMessage[2]
+                    {
+                        new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(entry.Id))),
+                        new ArrayRedisMessage(fieldChildren)
+                    };
+
+                    entryMessages[i] = new ArrayRedisMessage(entryChildren);
+                }
+
+                var streamChildren = new IRedisMessage[2]
+                {
+                    new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(stream.Key))),
+                    new ArrayRedisMessage(entryMessages)
+                };
+
+                streamMessages.Add(new ArrayRedisMessage(streamChildren));
+            }
+
+            WriteArray(ctx, streamMessages);
+        }
+
+        private async Task HandleXAckAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count < 4)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'xack' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key) || !TryGetString(args[2], out var group))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var ids = new string[args.Count - 3];
+            for (int i = 3; i < args.Count; i++)
+            {
+                if (!TryGetString(args[i], out var id) || !TryParseStreamIdText(id))
+                {
+                    WriteError(ctx, "ERR invalid stream id");
+                    return;
+                }
+
+                ids[i - 3] = id;
+            }
+
+            var result = await _store.StreamAckAsync(key, group, ids).ConfigureAwait(false);
+            switch (result.Status)
+            {
+                case StreamAckResultStatus.WrongType:
+                    WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                    return;
+
+                case StreamAckResultStatus.NoStream:
+                    WriteError(ctx, "ERR The XACK subcommand requires the key to exist");
+                    return;
+
+                case StreamAckResultStatus.NoGroup:
+                    WriteError(ctx, "NOGROUP No such consumer group");
+                    return;
+            }
+
+            WriteInteger(ctx, result.Count);
+        }
+
         private static bool TryParseStreamIdText(string text)
         {
             var parts = text.Split('-');
@@ -1268,5 +1508,8 @@ namespace Dredis
 
         private static void WriteArray(IChannelHandlerContext ctx, IList<IRedisMessage> children) =>
             ctx.WriteAndFlushAsync(new ArrayRedisMessage(children));
+
+        private static void WriteNullArray(IChannelHandlerContext ctx) =>
+            ctx.WriteAndFlushAsync(new ArrayRedisMessage(null));
     }
 }
