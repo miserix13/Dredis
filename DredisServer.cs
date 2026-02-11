@@ -9,6 +9,10 @@ namespace Dredis
     public sealed class DredisServer
     {
         private readonly IKeyValueStore _store;
+        private readonly SemaphoreSlim _lifecycleLock = new(1, 1);
+        private IEventLoopGroup? _bossGroup;
+        private IEventLoopGroup? _workerGroup;
+        private IChannel? _channel;
 
         public DredisServer(IKeyValueStore store)
         {
@@ -17,11 +21,55 @@ namespace Dredis
 
         public async Task RunAsync(int port, CancellationToken token = default)
         {
-            IEventLoopGroup bossGroup = new MultithreadEventLoopGroup(1);
-            IEventLoopGroup workerGroup = new MultithreadEventLoopGroup();
+            await StartAsync(port, token);
+
+            IChannel? channel;
+            await _lifecycleLock.WaitAsync(token);
+            try
+            {
+                channel = _channel;
+            }
+            finally
+            {
+                _lifecycleLock.Release();
+            }
+
+            if (channel == null)
+            {
+                return;
+            }
 
             try
             {
+                using (token.Register(() => _ = StopAsync()))
+                {
+                    await channel.CloseCompletion;
+                }
+            }
+            finally
+            {
+                await StopAsync();
+            }
+        }
+
+        public async Task StartAsync(int port, CancellationToken token = default)
+        {
+            await _lifecycleLock.WaitAsync(token);
+
+            IEventLoopGroup? bossGroup = null;
+            IEventLoopGroup? workerGroup = null;
+            IChannel? channel = null;
+
+            try
+            {
+                if (_channel != null)
+                {
+                    throw new InvalidOperationException("Server is already running.");
+                }
+
+                bossGroup = new MultithreadEventLoopGroup(1);
+                workerGroup = new MultithreadEventLoopGroup();
+
                 var bootstrap = new ServerBootstrap()
                     .Group(bossGroup, workerGroup)
                     .Channel<TcpServerSocketChannel>()
@@ -39,19 +87,63 @@ namespace Dredis
                         p.AddLast("dredisHandler", new DredisCommandHandler(_store));
                     }));
 
-                var channel = await bootstrap.BindAsync(IPAddress.Loopback, port);
+                channel = await bootstrap.BindAsync(IPAddress.Loopback, port);
 
-                using (token.Register(() => channel.CloseAsync()))
+                _bossGroup = bossGroup;
+                _workerGroup = workerGroup;
+                _channel = channel;
+            }
+            catch
+            {
+                if (channel != null)
                 {
-                    await channel.CloseCompletion;
+                    await channel.CloseAsync();
                 }
+
+                await ShutdownGroupsAsync(bossGroup, workerGroup);
+                throw;
             }
             finally
             {
-                await Task.WhenAll(
-                    bossGroup.ShutdownGracefullyAsync(),
-                    workerGroup.ShutdownGracefullyAsync());
+                _lifecycleLock.Release();
             }
+        }
+
+        public async Task StopAsync()
+        {
+            IEventLoopGroup? bossGroup;
+            IEventLoopGroup? workerGroup;
+            IChannel? channel;
+
+            await _lifecycleLock.WaitAsync();
+            try
+            {
+                bossGroup = _bossGroup;
+                workerGroup = _workerGroup;
+                channel = _channel;
+
+                _bossGroup = null;
+                _workerGroup = null;
+                _channel = null;
+            }
+            finally
+            {
+                _lifecycleLock.Release();
+            }
+
+            if (channel != null)
+            {
+                await channel.CloseAsync();
+            }
+
+            await ShutdownGroupsAsync(bossGroup, workerGroup);
+        }
+
+        private static Task ShutdownGroupsAsync(IEventLoopGroup? bossGroup, IEventLoopGroup? workerGroup)
+        {
+            return Task.WhenAll(
+                bossGroup?.ShutdownGracefullyAsync() ?? Task.CompletedTask,
+                workerGroup?.ShutdownGracefullyAsync() ?? Task.CompletedTask);
         }
     }
 }
