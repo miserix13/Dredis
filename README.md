@@ -12,6 +12,7 @@ Currently implemented RESP commands and behavior:
 - Counters: `INCR`, `INCRBY`, `DECR`, `DECRBY`
 - Expiration: `EXPIRE`, `PEXPIRE`, `TTL`, `PTTL`
 - Hashes: `HSET`, `HGET`, `HDEL`, `HGETALL`
+- Lists: `LPUSH`, `RPUSH`, `LPOP`, `RPOP`, `LRANGE`
 - Streams: `XADD`, `XDEL`, `XLEN`, `XTRIM`, `XRANGE`, `XREVRANGE`, `XREAD`, `XINFO`, `XSETID`, `XGROUP CREATE`, `XGROUP DESTROY`, `XGROUP SETID`, `XGROUP DELCONSUMER`, `XREADGROUP`, `XACK`, `XPENDING`, `XCLAIM`
 
 Notes:
@@ -33,9 +34,9 @@ Notes:
 | Counters | Yes | `INCR`, `INCRBY`, `DECR`, `DECRBY` |
 | Expiration | Yes | `EXPIRE`, `PEXPIRE`, `TTL`, `PTTL` |
 | Hashes | Yes | `HSET`, `HGET`, `HDEL`, `HGETALL` |
+| Lists | Yes | `LPUSH`, `RPUSH`, `LPOP`, `RPOP`, `LRANGE` |
 | Streams | Yes | `XADD`, `XDEL`, `XLEN`, `XTRIM`, `XRANGE`, `XREVRANGE`, `XREAD`, `XINFO`, `XSETID` |
 | Consumer groups | Yes | `XGROUP CREATE/DESTROY/SETID/DELCONSUMER`, `XREADGROUP`, `XACK`, `XPENDING`, `XCLAIM` |
-| Lists | No | Planned |
 | Sets | No | Planned |
 | Sorted sets | No | Planned |
 | Pub/Sub | No | Planned |
@@ -43,7 +44,6 @@ Notes:
 
 ## Short roadmap
 
-- Lists: `LPUSH`, `RPUSH`, `LPOP`, `RPOP`, `LRANGE`
 - Sets: `SADD`, `SREM`, `SMEMBERS`, `SCARD`
 - Sorted sets: `ZADD`, `ZREM`, `ZRANGE`, `ZCARD`
 - Pub/Sub: `SUBSCRIBE`, `PUBLISH`
