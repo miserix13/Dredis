@@ -15,6 +15,10 @@ namespace Dredis
         private readonly IKeyValueStore _store;
         private static readonly Encoding Utf8 = new UTF8Encoding(false);
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="DredisCommandHandler"/> class.
+        /// </summary>
+        /// <param name="store">The storage abstraction used for command execution.</param>
         public DredisCommandHandler(IKeyValueStore store)
         {
             _store = store;
@@ -37,6 +41,11 @@ namespace Dredis
             }
         }
 
+        /// <summary>
+        /// Parses the command array and routes it to the appropriate handler.
+        /// </summary>
+        /// <param name="ctx">The channel handler context.</param>
+        /// <param name="array">The command array message.</param>
         private async Task HandleCommandAsync(IChannelHandlerContext ctx, IArrayRedisMessage array)
         {
             var elements = array.Children;
@@ -176,6 +185,9 @@ namespace Dredis
             }
         }
 
+        /// <summary>
+        /// Handles the PING command.
+        /// </summary>
         private Task HandlePingAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
         {
             if (args.Count == 1)
@@ -200,6 +212,9 @@ namespace Dredis
             return Task.CompletedTask;
         }
 
+        /// <summary>
+        /// Handles the ECHO command.
+        /// </summary>
         private Task HandleEchoAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
         {
             if (args.Count != 2)
@@ -218,6 +233,9 @@ namespace Dredis
             return Task.CompletedTask;
         }
 
+        /// <summary>
+        /// Handles the GET command.
+        /// </summary>
         private async Task HandleGetAsync(
             IChannelHandlerContext ctx,
             IList<IRedisMessage> args)
@@ -245,6 +263,9 @@ namespace Dredis
             }
         }
 
+        /// <summary>
+        /// Handles the SET command with optional NX/XX and expiration options.
+        /// </summary>
         private async Task HandleSetAsync(
             IChannelHandlerContext ctx,
             IList<IRedisMessage> args)
@@ -350,6 +371,9 @@ namespace Dredis
             WriteNullBulkString(ctx);
         }
 
+        /// <summary>
+        /// Handles the MGET command.
+        /// </summary>
         private async Task HandleMGetAsync(
             IChannelHandlerContext ctx,
             IList<IRedisMessage> args)
@@ -386,6 +410,9 @@ namespace Dredis
             WriteArray(ctx, children);
         }
 
+        /// <summary>
+        /// Handles the MSET command.
+        /// </summary>
         private async Task HandleMSetAsync(
             IChannelHandlerContext ctx,
             IList<IRedisMessage> args)
@@ -426,6 +453,9 @@ namespace Dredis
             }
         }
 
+        /// <summary>
+        /// Handles the DEL command.
+        /// </summary>
         private async Task HandleDelAsync(
             IChannelHandlerContext ctx,
             IList<IRedisMessage> args)
@@ -452,6 +482,9 @@ namespace Dredis
             WriteInteger(ctx, removed);
         }
 
+        /// <summary>
+        /// Handles the EXISTS command.
+        /// </summary>
         private async Task HandleExistsAsync(
             IChannelHandlerContext ctx,
             IList<IRedisMessage> args)
@@ -491,6 +524,9 @@ namespace Dredis
             WriteInteger(ctx, count);
         }
 
+        /// <summary>
+        /// Handles INCR/INCRBY/DECR/DECRBY commands.
+        /// </summary>
         private async Task HandleIncrByAsync(
             IChannelHandlerContext ctx,
             IList<IRedisMessage> args,
@@ -546,6 +582,9 @@ namespace Dredis
             WriteInteger(ctx, value.Value);
         }
 
+        /// <summary>
+        /// Handles the EXPIRE command.
+        /// </summary>
         private async Task HandleExpireAsync(
             IChannelHandlerContext ctx,
             IList<IRedisMessage> args)
@@ -575,6 +614,9 @@ namespace Dredis
             WriteInteger(ctx, ok ? 1 : 0);
         }
 
+        /// <summary>
+        /// Handles the PEXPIRE command.
+        /// </summary>
         private async Task HandlePExpireAsync(
             IChannelHandlerContext ctx,
             IList<IRedisMessage> args)
@@ -604,6 +646,9 @@ namespace Dredis
             WriteInteger(ctx, ok ? 1 : 0);
         }
 
+        /// <summary>
+        /// Handles the TTL command.
+        /// </summary>
         private async Task HandleTtlAsync(
             IChannelHandlerContext ctx,
             IList<IRedisMessage> args)
@@ -624,6 +669,9 @@ namespace Dredis
             WriteInteger(ctx, ttl);
         }
 
+        /// <summary>
+        /// Handles the PTTL command.
+        /// </summary>
         private async Task HandlePttlAsync(
             IChannelHandlerContext ctx,
             IList<IRedisMessage> args)
@@ -644,6 +692,9 @@ namespace Dredis
             WriteInteger(ctx, ttl);
         }
 
+        /// <summary>
+        /// Handles the HSET command.
+        /// </summary>
         private async Task HandleHSetAsync(
             IChannelHandlerContext ctx,
             IList<IRedisMessage> args)
@@ -685,6 +736,9 @@ namespace Dredis
             WriteInteger(ctx, added);
         }
 
+        /// <summary>
+        /// Handles the HGET command.
+        /// </summary>
         private async Task HandleHGetAsync(
             IChannelHandlerContext ctx,
             IList<IRedisMessage> args)
@@ -711,6 +765,9 @@ namespace Dredis
             WriteBulkString(ctx, value);
         }
 
+        /// <summary>
+        /// Handles the HDEL command.
+        /// </summary>
         private async Task HandleHDelAsync(
             IChannelHandlerContext ctx,
             IList<IRedisMessage> args)
@@ -743,6 +800,9 @@ namespace Dredis
             WriteInteger(ctx, removed);
         }
 
+        /// <summary>
+        /// Handles the HGETALL command.
+        /// </summary>
         private async Task HandleHGetAllAsync(
             IChannelHandlerContext ctx,
             IList<IRedisMessage> args)
@@ -772,6 +832,9 @@ namespace Dredis
             WriteArray(ctx, children);
         }
 
+        /// <summary>
+        /// Handles the XADD command.
+        /// </summary>
         private async Task HandleXAddAsync(
             IChannelHandlerContext ctx,
             IList<IRedisMessage> args)
@@ -823,6 +886,9 @@ namespace Dredis
             WriteBulkString(ctx, Utf8.GetBytes(createdId));
         }
 
+        /// <summary>
+        /// Handles the XDEL command.
+        /// </summary>
         private async Task HandleXDelAsync(
             IChannelHandlerContext ctx,
             IList<IRedisMessage> args)
@@ -855,6 +921,9 @@ namespace Dredis
             WriteInteger(ctx, removed);
         }
 
+        /// <summary>
+        /// Handles the XLEN command.
+        /// </summary>
         private async Task HandleXLenAsync(
             IChannelHandlerContext ctx,
             IList<IRedisMessage> args)
@@ -875,6 +944,9 @@ namespace Dredis
             WriteInteger(ctx, length);
         }
 
+        /// <summary>
+        /// Handles the XREAD command.
+        /// </summary>
         private async Task HandleXReadAsync(
             IChannelHandlerContext ctx,
             IList<IRedisMessage> args)
@@ -1006,6 +1078,9 @@ namespace Dredis
             WriteArray(ctx, streamMessages);
         }
 
+        /// <summary>
+        /// Handles the XRANGE command.
+        /// </summary>
         private async Task HandleXRangeAsync(
             IChannelHandlerContext ctx,
             IList<IRedisMessage> args)
@@ -1072,6 +1147,9 @@ namespace Dredis
             WriteArray(ctx, entryMessages);
         }
 
+        /// <summary>
+        /// Handles the XGROUP command and dispatches subcommands.
+        /// </summary>
         private async Task HandleXGroupAsync(
             IChannelHandlerContext ctx,
             IList<IRedisMessage> args)
@@ -1098,6 +1176,9 @@ namespace Dredis
             }
         }
 
+        /// <summary>
+        /// Handles the XGROUP CREATE subcommand.
+        /// </summary>
         private async Task HandleXGroupCreateAsync(
             IChannelHandlerContext ctx,
             IList<IRedisMessage> args)
@@ -1160,6 +1241,9 @@ namespace Dredis
             }
         }
 
+        /// <summary>
+        /// Handles the XGROUP DESTROY subcommand.
+        /// </summary>
         private async Task HandleXGroupDestroyAsync(
             IChannelHandlerContext ctx,
             IList<IRedisMessage> args)
@@ -1186,6 +1270,9 @@ namespace Dredis
             WriteInteger(ctx, result == StreamGroupDestroyResult.Removed ? 1 : 0);
         }
 
+        /// <summary>
+        /// Handles the XREADGROUP command.
+        /// </summary>
         private async Task HandleXReadGroupAsync(
             IChannelHandlerContext ctx,
             IList<IRedisMessage> args)
@@ -1371,6 +1458,9 @@ namespace Dredis
             WriteArray(ctx, streamMessages);
         }
 
+        /// <summary>
+        /// Handles the XACK command.
+        /// </summary>
         private async Task HandleXAckAsync(
             IChannelHandlerContext ctx,
             IList<IRedisMessage> args)
@@ -1418,6 +1508,9 @@ namespace Dredis
             WriteInteger(ctx, result.Count);
         }
 
+        /// <summary>
+        /// Handles the XPENDING command.
+        /// </summary>
         private async Task HandleXPendingAsync(
             IChannelHandlerContext ctx,
             IList<IRedisMessage> args)
@@ -1570,6 +1663,9 @@ namespace Dredis
             await ctx.WriteAndFlushAsync(new ArrayRedisMessage(summary));
         }
 
+        /// <summary>
+        /// Handles the XCLAIM command.
+        /// </summary>
         private async Task HandleXClaimAsync(
             IChannelHandlerContext ctx,
             IList<IRedisMessage> args)
@@ -1729,6 +1825,9 @@ namespace Dredis
             }
         }
 
+        /// <summary>
+        /// Validates a stream id in the form "ms-seq".
+        /// </summary>
         private static bool TryParseStreamIdText(string text)
         {
             var parts = text.Split('-');
@@ -1740,16 +1839,25 @@ namespace Dredis
             return long.TryParse(parts[0], out _) && long.TryParse(parts[1], out _);
         }
 
+        /// <summary>
+        /// Determines whether a range id is valid for XRANGE bounds.
+        /// </summary>
         private static bool IsRangeId(string text)
         {
             return text == "-" || text == "+" || TryParseStreamIdText(text);
         }
 
+        /// <summary>
+        /// Determines whether a group create id is valid for XGROUP CREATE.
+        /// </summary>
         private static bool IsGroupCreateId(string text)
         {
             return text == "-" || text == "$" || TryParseStreamIdText(text);
         }
 
+        /// <summary>
+        /// Reads a string representation from a Redis message.
+        /// </summary>
         private static string GetString(IRedisMessage msg)
         {
             switch (msg)
@@ -1769,6 +1877,9 @@ namespace Dredis
             }
         }
 
+        /// <summary>
+        /// Tries to read a string from a Redis message.
+        /// </summary>
         private static bool TryGetString(IRedisMessage msg, out string value)
         {
             switch (msg)
@@ -1790,6 +1901,9 @@ namespace Dredis
             }
         }
 
+        /// <summary>
+        /// Tries to read bytes from a Redis message.
+        /// </summary>
         private static bool TryGetBytes(IRedisMessage msg, out byte[] value)
         {
             switch (msg)
@@ -1811,24 +1925,45 @@ namespace Dredis
             }
         }
 
+        /// <summary>
+        /// Writes a simple string reply.
+        /// </summary>
         private static void WriteSimpleString(IChannelHandlerContext ctx, string text) =>
             ctx.WriteAndFlushAsync(new SimpleStringRedisMessage(text));
 
+        /// <summary>
+        /// Writes an error reply.
+        /// </summary>
         private static void WriteError(IChannelHandlerContext ctx, string error) =>
             ctx.WriteAndFlushAsync(new ErrorRedisMessage(error));
 
+        /// <summary>
+        /// Writes an integer reply.
+        /// </summary>
         private static void WriteInteger(IChannelHandlerContext ctx, long value) =>
             ctx.WriteAndFlushAsync(new IntegerRedisMessage(value));
 
+        /// <summary>
+        /// Writes a null bulk string reply.
+        /// </summary>
         private static void WriteNullBulkString(IChannelHandlerContext ctx) =>
             ctx.WriteAndFlushAsync(FullBulkStringRedisMessage.Null);
 
+        /// <summary>
+        /// Writes a bulk string reply.
+        /// </summary>
         private static void WriteBulkString(IChannelHandlerContext ctx, byte[] data) =>
             ctx.WriteAndFlushAsync(new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(data)));
 
+        /// <summary>
+        /// Writes an array reply.
+        /// </summary>
         private static void WriteArray(IChannelHandlerContext ctx, IList<IRedisMessage> children) =>
             ctx.WriteAndFlushAsync(new ArrayRedisMessage(children));
 
+        /// <summary>
+        /// Writes a null array reply.
+        /// </summary>
         private static void WriteNullArray(IChannelHandlerContext ctx) =>
             ctx.WriteAndFlushAsync(new ArrayRedisMessage(null));
     }

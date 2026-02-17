@@ -7,6 +7,9 @@ using Dredis.Abstractions.Storage;
 
 namespace Dredis
 {
+    /// <summary>
+    /// Hosts the Dredis server and manages the DotNetty pipeline lifecycle.
+    /// </summary>
     public sealed class DredisServer
     {
         private readonly IKeyValueStore _store;
@@ -15,11 +18,20 @@ namespace Dredis
         private IEventLoopGroup? _workerGroup;
         private IChannel? _channel;
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="DredisServer"/> class.
+        /// </summary>
+        /// <param name="store">The storage abstraction used for command handling.</param>
         public DredisServer(IKeyValueStore store)
         {
             _store = store;
         }
 
+        /// <summary>
+        /// Starts the server, waits for shutdown, and ensures resources are released.
+        /// </summary>
+        /// <param name="port">The TCP port to bind.</param>
+        /// <param name="token">A cancellation token used to stop the server.</param>
         public async Task RunAsync(int port, CancellationToken token = default)
         {
             await StartAsync(port, token);
@@ -53,6 +65,11 @@ namespace Dredis
             }
         }
 
+        /// <summary>
+        /// Starts the server without blocking for shutdown.
+        /// </summary>
+        /// <param name="port">The TCP port to bind.</param>
+        /// <param name="token">A cancellation token used to abort startup.</param>
         public async Task StartAsync(int port, CancellationToken token = default)
         {
             await _lifecycleLock.WaitAsync(token);
@@ -110,6 +127,9 @@ namespace Dredis
             }
         }
 
+        /// <summary>
+        /// Stops the server and releases all network resources.
+        /// </summary>
         public async Task StopAsync()
         {
             IEventLoopGroup? bossGroup;
@@ -140,6 +160,11 @@ namespace Dredis
             await ShutdownGroupsAsync(bossGroup, workerGroup);
         }
 
+        /// <summary>
+        /// Shuts down DotNetty event loop groups gracefully.
+        /// </summary>
+        /// <param name="bossGroup">The boss event loop group, if any.</param>
+        /// <param name="workerGroup">The worker event loop group, if any.</param>
         private static Task ShutdownGroupsAsync(IEventLoopGroup? bossGroup, IEventLoopGroup? workerGroup)
         {
             return Task.WhenAll(

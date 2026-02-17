@@ -6,11 +6,17 @@ using Xunit;
 
 namespace Dredis.Tests
 {
+    /// <summary>
+    /// Integration-style tests for the Dredis server.
+    /// </summary>
     public sealed class DredisServerTests
     {
         private static readonly Encoding Utf8 = new UTF8Encoding(false);
 
         [Fact]
+        /// <summary>
+        /// Verifies PING round-trips and server shuts down cleanly.
+        /// </summary>
         public async Task RunAsync_PingRespondsAndShutsDownOnCancel()
         {
             var store = new InMemoryKeyValueStore();
@@ -31,6 +37,9 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        /// <summary>
+        /// Verifies SET/GET round-trip over the server socket.
+        /// </summary>
         public async Task RunAsync_SetGetRoundTrip()
         {
             var store = new InMemoryKeyValueStore();
@@ -57,6 +66,9 @@ namespace Dredis.Tests
             await serverTask;
         }
 
+        /// <summary>
+        /// Finds an available TCP port on localhost.
+        /// </summary>
         private static int GetFreePort()
         {
             var listener = new TcpListener(IPAddress.Loopback, 0);
@@ -66,6 +78,9 @@ namespace Dredis.Tests
             return port;
         }
 
+        /// <summary>
+        /// Connects to the server with retry until timeout.
+        /// </summary>
         private static async Task<TcpClient> ConnectWithRetryAsync(int port)
         {
             var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
@@ -91,12 +106,18 @@ namespace Dredis.Tests
             throw new InvalidOperationException("Failed to connect to server.", last);
         }
 
+        /// <summary>
+        /// Sends a raw RESP command to the server.
+        /// </summary>
         private static async Task SendAsync(TcpClient client, string text)
         {
             var bytes = Utf8.GetBytes(text);
             await client.GetStream().WriteAsync(bytes, 0, bytes.Length);
         }
 
+        /// <summary>
+        /// Reads a RESP line terminated by CRLF.
+        /// </summary>
         private static async Task<string> ReadLineAsync(TcpClient client)
         {
             var stream = client.GetStream();
@@ -127,6 +148,9 @@ namespace Dredis.Tests
             return Utf8.GetString(buffer.ToArray());
         }
 
+        /// <summary>
+        /// Reads a RESP bulk string with known length.
+        /// </summary>
         private static async Task<string> ReadBulkStringAsync(TcpClient client, int length)
         {
             var stream = client.GetStream();
@@ -154,6 +178,9 @@ namespace Dredis.Tests
             return Utf8.GetString(buffer);
         }
 
+        /// <summary>
+        /// Reads a single byte from the network stream.
+        /// </summary>
         private static async Task<int> ReadByteAsync(NetworkStream stream)
         {
             var buffer = new byte[1];

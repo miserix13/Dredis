@@ -7,11 +7,17 @@ using Xunit;
 
 namespace Dredis.Tests
 {
+    /// <summary>
+    /// Command handler tests covering RESP command behavior.
+    /// </summary>
     public sealed class DredisCommandHandlerTests
     {
         private static readonly Encoding Utf8 = new UTF8Encoding(false);
 
         [Fact]
+        /// <summary>
+        /// Verifies PING without args returns PONG.
+        /// </summary>
         public async Task Ping_NoArgs_ReturnsPong()
         {
             var store = new InMemoryKeyValueStore();
@@ -34,6 +40,9 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        /// <summary>
+        /// Verifies PING with payload returns bulk string.
+        /// </summary>
         public async Task Ping_WithMessage_ReturnsBulk()
         {
             var store = new InMemoryKeyValueStore();
@@ -56,6 +65,9 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        /// <summary>
+        /// Verifies ECHO rejects invalid argument count.
+        /// </summary>
         public async Task Echo_WrongArgs_ReturnsError()
         {
             var store = new InMemoryKeyValueStore();
@@ -78,6 +90,9 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        /// <summary>
+        /// Verifies SET followed by GET returns the stored value.
+        /// </summary>
         public async Task Set_Get_RoundTrip()
         {
             var store = new InMemoryKeyValueStore();
@@ -106,6 +121,9 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        /// <summary>
+        /// Verifies SET NX fails when the key already exists.
+        /// </summary>
         public async Task Set_Nx_WhenExists_ReturnsNullBulk()
         {
             var store = new InMemoryKeyValueStore();
@@ -130,6 +148,9 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        /// <summary>
+        /// Verifies INCRBY rejects non-integer values.
+        /// </summary>
         public async Task IncrBy_NonInteger_ReturnsError()
         {
             var store = new InMemoryKeyValueStore();
@@ -152,6 +173,9 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        /// <summary>
+        /// Verifies MGET returns values and nulls in order.
+        /// </summary>
         public async Task MGet_ReturnsValuesAndNulls()
         {
             var store = new InMemoryKeyValueStore();
@@ -179,6 +203,9 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        /// <summary>
+        /// Verifies MSET stores multiple values.
+        /// </summary>
         public async Task MSet_SetsValues_ReturnsOk()
         {
             var store = new InMemoryKeyValueStore();
@@ -207,6 +234,9 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        /// <summary>
+        /// Verifies DEL removes keys and returns count.
+        /// </summary>
         public async Task Del_RemovesKeys_ReturnsCount()
         {
             var store = new InMemoryKeyValueStore();
@@ -230,6 +260,9 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        /// <summary>
+        /// Verifies EXISTS returns correct counts for single and multiple keys.
+        /// </summary>
         public async Task Exists_SingleAndMulti_ReturnsCounts()
         {
             var store = new InMemoryKeyValueStore();
@@ -260,6 +293,9 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        /// <summary>
+        /// Verifies INCR/DECR/INCRBY change values as expected.
+        /// </summary>
         public async Task Incr_Decr_RoundTrip()
         {
             var store = new InMemoryKeyValueStore();
@@ -295,6 +331,9 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        /// <summary>
+        /// Verifies EXPIRE and TTL report remaining seconds.
+        /// </summary>
         public async Task Expire_Ttl_ReturnsRemainingSeconds()
         {
             var store = new InMemoryKeyValueStore();
@@ -327,6 +366,9 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        /// <summary>
+        /// Verifies PEXPIRE and PTTL report remaining milliseconds.
+        /// </summary>
         public async Task PExpire_Pttl_ReturnsRemainingMilliseconds()
         {
             var store = new InMemoryKeyValueStore();
@@ -359,6 +401,9 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        /// <summary>
+        /// Verifies TTL returns -2 for missing keys.
+        /// </summary>
         public async Task Ttl_MissingKey_ReturnsMinusTwo()
         {
             var store = new InMemoryKeyValueStore();
@@ -380,6 +425,9 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        /// <summary>
+        /// Verifies HSET/HGET round-trip a field value.
+        /// </summary>
         public async Task HSet_HGet_RoundTrip()
         {
             var store = new InMemoryKeyValueStore();
@@ -408,6 +456,9 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        /// <summary>
+        /// Verifies HSET returns zero when updating existing field.
+        /// </summary>
         public async Task HSet_UpdateField_ReturnsZero()
         {
             var store = new InMemoryKeyValueStore();
@@ -433,6 +484,9 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        /// <summary>
+        /// Verifies HDEL removes fields and returns removed count.
+        /// </summary>
         public async Task HDel_RemovesFields_ReturnsCount()
         {
             var store = new InMemoryKeyValueStore();
@@ -458,6 +512,9 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        /// <summary>
+        /// Verifies HGETALL returns all field/value pairs.
+        /// </summary>
         public async Task HGetAll_ReturnsAllPairs()
         {
             var store = new InMemoryKeyValueStore();
@@ -487,6 +544,9 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        /// <summary>
+        /// Verifies XADD and XLEN return expected stream length.
+        /// </summary>
         public async Task XAdd_XLen_ReturnsCount()
         {
             var store = new InMemoryKeyValueStore();
@@ -515,6 +575,9 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        /// <summary>
+        /// Verifies XREAD returns entries after the provided id.
+        /// </summary>
         public async Task XRead_ReturnsEntriesAfterId()
         {
             var store = new InMemoryKeyValueStore();
@@ -553,6 +616,9 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        /// <summary>
+        /// Verifies XDEL removes entries and returns count.
+        /// </summary>
         public async Task XDel_RemovesEntries_ReturnsCount()
         {
             var store = new InMemoryKeyValueStore();
@@ -582,6 +648,9 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        /// <summary>
+        /// Verifies XRANGE returns entries in the requested range.
+        /// </summary>
         public async Task XRange_ReturnsEntriesInRange()
         {
             var store = new InMemoryKeyValueStore();
@@ -616,6 +685,9 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        /// <summary>
+        /// Verifies XRANGE COUNT limits returned entries.
+        /// </summary>
         public async Task XRange_Count_LimitsEntries()
         {
             var store = new InMemoryKeyValueStore();
@@ -649,6 +721,9 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        /// <summary>
+        /// Verifies XGROUP CREATE MKSTREAM creates group on empty stream.
+        /// </summary>
         public async Task XGroupCreate_MkStream_CreatesGroup()
         {
             var store = new InMemoryKeyValueStore();
@@ -670,6 +745,9 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        /// <summary>
+        /// Verifies XGROUP CREATE fails without existing stream.
+        /// </summary>
         public async Task XGroupCreate_WithoutStream_ReturnsError()
         {
             var store = new InMemoryKeyValueStore();
@@ -691,6 +769,9 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        /// <summary>
+        /// Verifies duplicate XGROUP CREATE returns BUSYGROUP.
+        /// </summary>
         public async Task XGroupCreate_Duplicate_ReturnsBusyGroup()
         {
             var store = new InMemoryKeyValueStore();
@@ -716,6 +797,9 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        /// <summary>
+        /// Verifies XGROUP DESTROY removes the group and returns count.
+        /// </summary>
         public async Task XGroupDestroy_RemovesGroup_ReturnsCount()
         {
             var store = new InMemoryKeyValueStore();
@@ -741,6 +825,9 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        /// <summary>
+        /// Verifies XREADGROUP returns entries and XACK removes pending.
+        /// </summary>
         public async Task XReadGroup_ReturnsEntriesAndAckRemovesPending()
         {
             var store = new InMemoryKeyValueStore();
@@ -782,6 +869,9 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        /// <summary>
+        /// Verifies XREADGROUP BLOCK waits for entries.
+        /// </summary>
         public async Task XReadGroup_Block_WaitsForEntry()
         {
             var store = new InMemoryKeyValueStore();
@@ -816,6 +906,9 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        /// <summary>
+        /// Verifies XPENDING summary and extended forms.
+        /// </summary>
         public async Task XPending_ReturnsSummaryAndExtendedInfo()
         {
             var store = new InMemoryKeyValueStore();
@@ -921,6 +1014,9 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        /// <summary>
+        /// Verifies XCLAIM transfers pending entries between consumers.
+        /// </summary>
         public async Task XClaim_TransfersPendingEntries()
         {
             var store = new InMemoryKeyValueStore();
@@ -990,6 +1086,9 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        /// <summary>
+        /// Verifies XCLAIM options like JUSTID, RETRYCOUNT, and FORCE.
+        /// </summary>
         public async Task XClaim_WithOptions()
         {
             var store = new InMemoryKeyValueStore();
@@ -1065,6 +1164,9 @@ namespace Dredis.Tests
             }
         }
 
+        /// <summary>
+        /// Reads the next outbound message after running pending tasks.
+        /// </summary>
         private static IRedisMessage ReadOutbound(EmbeddedChannel channel)
         {
             channel.RunPendingTasks();
@@ -1072,6 +1174,9 @@ namespace Dredis.Tests
             return channel.ReadOutbound<IRedisMessage>();
         }
 
+        /// <summary>
+        /// Builds a RESP array message from string parts.
+        /// </summary>
         private static ArrayRedisMessage Command(params string[] parts)
         {
             var children = new IRedisMessage[parts.Length];
@@ -1084,6 +1189,9 @@ namespace Dredis.Tests
             return new ArrayRedisMessage(children);
         }
 
+        /// <summary>
+        /// Extracts a UTF-8 string from a bulk string message.
+        /// </summary>
         private static string GetBulkString(FullBulkStringRedisMessage message)
         {
             var length = message.Content.ReadableBytes;
@@ -1092,6 +1200,9 @@ namespace Dredis.Tests
             return Utf8.GetString(buffer, 0, length);
         }
 
+        /// <summary>
+        /// Extracts a UTF-8 string from a bulk message or returns null.
+        /// </summary>
         private static string? GetBulkOrNull(IRedisMessage message)
         {
             if (ReferenceEquals(message, FullBulkStringRedisMessage.Null))
@@ -1107,6 +1218,9 @@ namespace Dredis.Tests
             return null;
         }
 
+        /// <summary>
+        /// Converts a RESP array of hash pairs into a dictionary.
+        /// </summary>
         private static Dictionary<string, string> GetHashPairs(IList<IRedisMessage> children)
         {
             var result = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -1123,6 +1237,9 @@ namespace Dredis.Tests
             return result;
         }
 
+        /// <summary>
+        /// Converts a RESP array of stream entries into a dictionary.
+        /// </summary>
         private static Dictionary<string, Dictionary<string, string>> GetStreamEntries(IList<IRedisMessage> children)
         {
             var result = new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
@@ -1138,6 +1255,9 @@ namespace Dredis.Tests
         }
     }
 
+    /// <summary>
+    /// In-memory implementation of <see cref="IKeyValueStore"/> for tests.
+    /// </summary>
     internal sealed class InMemoryKeyValueStore : IKeyValueStore
     {
         private readonly Dictionary<string, byte[]> _data = new(StringComparer.Ordinal);
@@ -1148,8 +1268,14 @@ namespace Dredis.Tests
         private readonly Dictionary<string, DateTimeOffset?> _expirations = new(StringComparer.Ordinal);
         private static readonly Encoding Utf8 = new UTF8Encoding(false);
 
+        /// <summary>
+        /// Internal stream entry model used for test storage.
+        /// </summary>
         private sealed class StreamEntryModel
         {
+            /// <summary>
+            /// Initializes a new instance of the <see cref="StreamEntryModel"/> class.
+            /// </summary>
             public StreamEntryModel(string id, StreamId parsedId, KeyValuePair<string, byte[]>[] fields)
             {
                 Id = id;
@@ -1162,8 +1288,14 @@ namespace Dredis.Tests
             public KeyValuePair<string, byte[]>[] Fields { get; }
         }
 
+        /// <summary>
+        /// Internal state for a stream consumer group.
+        /// </summary>
         private sealed class StreamGroupState
         {
+            /// <summary>
+            /// Initializes a new instance of the <see cref="StreamGroupState"/> class.
+            /// </summary>
             public StreamGroupState(StreamId lastDeliveredId)
             {
                 LastDeliveredId = lastDeliveredId;
@@ -1174,8 +1306,14 @@ namespace Dredis.Tests
             public Dictionary<string, PendingEntryInfo> Pending { get; }
         }
 
+        /// <summary>
+        /// Tracks pending entry metadata for consumer groups.
+        /// </summary>
         private sealed class PendingEntryInfo
         {
+            /// <summary>
+            /// Initializes a new instance of the <see cref="PendingEntryInfo"/> class.
+            /// </summary>
             public PendingEntryInfo(string consumer, DateTimeOffset deliveryTime, long deliveryCount)
             {
                 Consumer = consumer;
@@ -1188,8 +1326,14 @@ namespace Dredis.Tests
             public long DeliveryCount { get; set; }
         }
 
+        /// <summary>
+        /// Represents a parsed stream id for comparison.
+        /// </summary>
         private readonly struct StreamId : IComparable<StreamId>
         {
+            /// <summary>
+            /// Initializes a new instance of the <see cref="StreamId"/> struct.
+            /// </summary>
             public StreamId(long ms, long seq)
             {
                 Ms = ms;
@@ -1199,6 +1343,9 @@ namespace Dredis.Tests
             public long Ms { get; }
             public long Seq { get; }
 
+            /// <summary>
+            /// Compares two stream ids for ordering.
+            /// </summary>
             public int CompareTo(StreamId other)
             {
                 var cmp = Ms.CompareTo(other.Ms);
@@ -1206,6 +1353,9 @@ namespace Dredis.Tests
             }
         }
 
+        /// <summary>
+        /// Seeds the store with a string value for tests.
+        /// </summary>
         public void Seed(string key, string value)
         {
             _data[key] = Utf8.GetBytes(value);
@@ -1216,11 +1366,17 @@ namespace Dredis.Tests
             _expirations.Remove(key);
         }
 
+        /// <summary>
+        /// Gets the value for a key.
+        /// </summary>
         public Task<byte[]?> GetAsync(string key, CancellationToken token = default)
         {
             return Task.FromResult(GetValue(key));
         }
 
+        /// <summary>
+        /// Sets a value with optional expiration and condition.
+        /// </summary>
         public Task<bool> SetAsync(
             string key,
             byte[] value,
@@ -1258,6 +1414,9 @@ namespace Dredis.Tests
             return Task.FromResult(true);
         }
 
+        /// <summary>
+        /// Gets values for multiple keys.
+        /// </summary>
         public Task<byte[]?[]> GetManyAsync(string[] keys, CancellationToken token = default)
         {
             var result = new byte[]?[keys.Length];
@@ -1269,6 +1428,9 @@ namespace Dredis.Tests
             return Task.FromResult(result);
         }
 
+        /// <summary>
+        /// Sets multiple key/value pairs.
+        /// </summary>
         public Task<bool> SetManyAsync(KeyValuePair<string, byte[]>[] items, CancellationToken token = default)
         {
             foreach (var item in items)
@@ -1284,6 +1446,9 @@ namespace Dredis.Tests
             return Task.FromResult(true);
         }
 
+        /// <summary>
+        /// Deletes keys and returns the removal count.
+        /// </summary>
         public Task<long> DeleteAsync(string[] keys, CancellationToken token = default)
         {
             long removed = 0;
@@ -1298,11 +1463,17 @@ namespace Dredis.Tests
             return Task.FromResult(removed);
         }
 
+        /// <summary>
+        /// Returns whether a single key exists.
+        /// </summary>
         public Task<bool> ExistsAsync(string key, CancellationToken token = default)
         {
             return Task.FromResult(HasKey(key));
         }
 
+        /// <summary>
+        /// Returns the count of existing keys.
+        /// </summary>
         public Task<long> ExistsAsync(string[] keys, CancellationToken token = default)
         {
             long count = 0;
@@ -1317,6 +1488,9 @@ namespace Dredis.Tests
             return Task.FromResult(count);
         }
 
+        /// <summary>
+        /// Increments a key by a delta and returns the new value.
+        /// </summary>
         public Task<long?> IncrByAsync(string key, long delta, CancellationToken token = default)
         {
             var value = GetValue(key);
@@ -1343,6 +1517,9 @@ namespace Dredis.Tests
             }
         }
 
+        /// <summary>
+        /// Sets a key expiration in seconds.
+        /// </summary>
         public Task<bool> ExpireAsync(string key, TimeSpan expiration, CancellationToken token = default)
         {
             if (!HasKey(key))
@@ -1354,6 +1531,9 @@ namespace Dredis.Tests
             return Task.FromResult(true);
         }
 
+        /// <summary>
+        /// Sets a key expiration in milliseconds.
+        /// </summary>
         public Task<bool> PExpireAsync(string key, TimeSpan expiration, CancellationToken token = default)
         {
             if (!HasKey(key))
@@ -1365,6 +1545,9 @@ namespace Dredis.Tests
             return Task.FromResult(true);
         }
 
+        /// <summary>
+        /// Returns remaining TTL in seconds, or special values for missing/no-expiry keys.
+        /// </summary>
         public Task<long> TtlAsync(string key, CancellationToken token = default)
         {
             if (!HasKey(key))
@@ -1388,6 +1571,9 @@ namespace Dredis.Tests
             return Task.FromResult((long)remaining.TotalSeconds);
         }
 
+        /// <summary>
+        /// Returns remaining TTL in milliseconds, or special values for missing/no-expiry keys.
+        /// </summary>
         public Task<long> PttlAsync(string key, CancellationToken token = default)
         {
             if (!HasKey(key))
@@ -1411,6 +1597,9 @@ namespace Dredis.Tests
             return Task.FromResult((long)remaining.TotalMilliseconds);
         }
 
+        /// <summary>
+        /// Removes expired keys and returns the number removed.
+        /// </summary>
         public Task<long> CleanUpExpiredKeysAsync(CancellationToken token = default)
         {
             long removed = 0;
@@ -1433,6 +1622,9 @@ namespace Dredis.Tests
             return Task.FromResult(removed);
         }
 
+        /// <summary>
+        /// Adds a stream entry and returns its id.
+        /// </summary>
         public Task<string?> StreamAddAsync(
             string key,
             string id,
@@ -1478,6 +1670,9 @@ namespace Dredis.Tests
             return Task.FromResult<string?>(nextIdText);
         }
 
+        /// <summary>
+        /// Removes stream entries by id and returns the count removed.
+        /// </summary>
         public Task<long> StreamDeleteAsync(string key, string[] ids, CancellationToken token = default)
         {
             if (IsExpired(key))
@@ -1513,6 +1708,9 @@ namespace Dredis.Tests
             return Task.FromResult(removed);
         }
 
+        /// <summary>
+        /// Returns the number of entries in the stream.
+        /// </summary>
         public Task<long> StreamLengthAsync(string key, CancellationToken token = default)
         {
             if (IsExpired(key))
@@ -1524,6 +1722,9 @@ namespace Dredis.Tests
             return Task.FromResult(_streams.TryGetValue(key, out var stream) ? stream.Count : 0L);
         }
 
+        /// <summary>
+        /// Reads entries after the specified ids for each stream.
+        /// </summary>
         public Task<StreamReadResult[]> StreamReadAsync(
             string[] keys,
             string[] ids,
@@ -1574,6 +1775,9 @@ namespace Dredis.Tests
             return Task.FromResult(results.ToArray());
         }
 
+        /// <summary>
+        /// Creates a consumer group for a stream.
+        /// </summary>
         public Task<StreamGroupCreateResult> StreamGroupCreateAsync(
             string key,
             string group,
@@ -1624,6 +1828,9 @@ namespace Dredis.Tests
             return Task.FromResult(StreamGroupCreateResult.Ok);
         }
 
+        /// <summary>
+        /// Destroys a consumer group for a stream.
+        /// </summary>
         public Task<StreamGroupDestroyResult> StreamGroupDestroyAsync(
             string key,
             string group,
@@ -1658,6 +1865,9 @@ namespace Dredis.Tests
             return Task.FromResult(StreamGroupDestroyResult.Removed);
         }
 
+        /// <summary>
+        /// Reads entries for a consumer group.
+        /// </summary>
         public async Task<StreamGroupReadResult> StreamGroupReadAsync(
             string group,
             string consumer,
@@ -1688,6 +1898,9 @@ namespace Dredis.Tests
             return new StreamGroupReadResult(StreamGroupReadResultStatus.Ok, Array.Empty<StreamReadResult>());
         }
 
+        /// <summary>
+        /// Acknowledges pending entries for a consumer group.
+        /// </summary>
         public Task<StreamAckResult> StreamAckAsync(
             string key,
             string group,
@@ -1727,6 +1940,9 @@ namespace Dredis.Tests
             return Task.FromResult(new StreamAckResult(StreamAckResultStatus.Ok, removed));
         }
 
+        /// <summary>
+        /// Returns pending entry information for a consumer group.
+        /// </summary>
         public Task<StreamPendingResult> StreamPendingAsync(
             string key,
             string group,
@@ -1853,6 +2069,9 @@ namespace Dredis.Tests
                 consumerCounts, Array.Empty<StreamPendingEntry>()));
         }
 
+        /// <summary>
+        /// Claims pending entries for a new consumer.
+        /// </summary>
         public Task<StreamClaimResult> StreamClaimAsync(
             string key,
             string group,
@@ -1956,6 +2175,9 @@ namespace Dredis.Tests
                 StreamClaimResultStatus.Ok, claimedEntries.ToArray()));
         }
 
+        /// <summary>
+        /// Returns stream entries within the specified id range.
+        /// </summary>
         public Task<StreamEntry[]> StreamRangeAsync(
             string key,
             string start,
@@ -2005,6 +2227,9 @@ namespace Dredis.Tests
             return Task.FromResult(entries.ToArray());
         }
 
+        /// <summary>
+        /// Sets a hash field value.
+        /// </summary>
         public Task<bool> HashSetAsync(string key, string field, byte[] value, CancellationToken token = default)
         {
             if (IsExpired(key))
@@ -2027,6 +2252,9 @@ namespace Dredis.Tests
             return Task.FromResult(isNew);
         }
 
+        /// <summary>
+        /// Gets a hash field value.
+        /// </summary>
         public Task<byte[]?> HashGetAsync(string key, string field, CancellationToken token = default)
         {
             if (IsExpired(key))
@@ -2043,6 +2271,9 @@ namespace Dredis.Tests
             return Task.FromResult<byte[]?>(value);
         }
 
+        /// <summary>
+        /// Deletes hash fields and returns the count removed.
+        /// </summary>
         public Task<long> HashDeleteAsync(string key, string[] fields, CancellationToken token = default)
         {
             if (IsExpired(key))
@@ -2074,6 +2305,9 @@ namespace Dredis.Tests
             return Task.FromResult(removed);
         }
 
+        /// <summary>
+        /// Gets all hash fields and values.
+        /// </summary>
         public Task<KeyValuePair<string, byte[]>[]> HashGetAllAsync(string key, CancellationToken token = default)
         {
             if (IsExpired(key))
@@ -2097,6 +2331,9 @@ namespace Dredis.Tests
             return Task.FromResult(items);
         }
 
+        /// <summary>
+        /// Retrieves a stored value while honoring expiration.
+        /// </summary>
         private byte[]? GetValue(string key)
         {
             if (IsExpired(key))
@@ -2124,6 +2361,9 @@ namespace Dredis.Tests
             return null;
         }
 
+        /// <summary>
+        /// Determines whether a key exists in any data structure.
+        /// </summary>
         private bool HasKey(string key)
         {
             if (IsExpired(key))
@@ -2135,6 +2375,9 @@ namespace Dredis.Tests
             return _data.ContainsKey(key) || _hashes.ContainsKey(key) || _streams.ContainsKey(key);
         }
 
+        /// <summary>
+        /// Returns whether a key is expired.
+        /// </summary>
         private bool IsExpired(string key)
         {
             if (!_expirations.TryGetValue(key, out var expiresAt) || expiresAt == null)
@@ -2145,6 +2388,9 @@ namespace Dredis.Tests
             return expiresAt.Value <= DateTimeOffset.UtcNow;
         }
 
+        /// <summary>
+        /// Removes a key from all structures.
+        /// </summary>
         private bool RemoveKey(string key)
         {
             var removed = _data.Remove(key);
@@ -2156,6 +2402,9 @@ namespace Dredis.Tests
             return removed;
         }
 
+        /// <summary>
+        /// Parses a stream id into a comparable structure.
+        /// </summary>
         private static bool TryParseStreamId(string text, out StreamId id)
         {
             id = default;
@@ -2174,11 +2423,17 @@ namespace Dredis.Tests
             return true;
         }
 
+        /// <summary>
+        /// Formats a stream id from its components.
+        /// </summary>
         private static string FormatStreamId(StreamId id)
         {
             return $"{id.Ms}-{id.Seq}";
         }
 
+        /// <summary>
+        /// Resolves the start id for a consumer group creation request.
+        /// </summary>
         private bool TryResolveGroupStartId(
             string key,
             List<StreamEntryModel> stream,
@@ -2209,6 +2464,9 @@ namespace Dredis.Tests
             return TryParseStreamId(startId, out lastId);
         }
 
+        /// <summary>
+        /// Reads entries for a consumer group, optionally allowing block semantics.
+        /// </summary>
         private bool TryReadGroup(
             string group,
             string consumer,
@@ -2318,6 +2576,9 @@ namespace Dredis.Tests
             return results.Length > 0 || allowBlock;
         }
 
+        /// <summary>
+        /// Resolves the read start id and whether to use pending entries.
+        /// </summary>
         private static bool TryResolveReadStartId(
             string id,
             StreamGroupState state,

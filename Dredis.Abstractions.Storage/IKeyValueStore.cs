@@ -2,6 +2,9 @@
 
 namespace Dredis.Abstractions.Storage
 {
+    /// <summary>
+    /// Defines conditional semantics for setting string values.
+    /// </summary>
     public enum SetCondition
     {
         None,
@@ -9,30 +12,61 @@ namespace Dredis.Abstractions.Storage
         Xx
     }
 
+    /// <summary>
+    /// Represents a stream entry with fields and values.
+    /// </summary>
     public sealed class StreamEntry
     {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="StreamEntry"/> class.
+        /// </summary>
+        /// <param name="id">The stream entry id.</param>
+        /// <param name="fields">The field/value pairs for the entry.</param>
         public StreamEntry(string id, KeyValuePair<string, byte[]>[] fields)
         {
             Id = id;
             Fields = fields;
         }
 
+        /// <summary>
+        /// Gets the stream entry id.
+        /// </summary>
         public string Id { get; }
+        /// <summary>
+        /// Gets the field/value pairs for the entry.
+        /// </summary>
         public KeyValuePair<string, byte[]>[] Fields { get; }
     }
 
+    /// <summary>
+    /// Represents stream read results for a single stream.
+    /// </summary>
     public sealed class StreamReadResult
     {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="StreamReadResult"/> class.
+        /// </summary>
+        /// <param name="key">The stream key.</param>
+        /// <param name="entries">The stream entries.</param>
         public StreamReadResult(string key, StreamEntry[] entries)
         {
             Key = key;
             Entries = entries;
         }
 
+        /// <summary>
+        /// Gets the stream key.
+        /// </summary>
         public string Key { get; }
+        /// <summary>
+        /// Gets the entries returned for the stream.
+        /// </summary>
         public StreamEntry[] Entries { get; }
     }
 
+    /// <summary>
+    /// Describes results of creating a consumer group.
+    /// </summary>
     public enum StreamGroupCreateResult
     {
         Ok,
@@ -42,6 +76,9 @@ namespace Dredis.Abstractions.Storage
         InvalidId
     }
 
+    /// <summary>
+    /// Describes results of destroying a consumer group.
+    /// </summary>
     public enum StreamGroupDestroyResult
     {
         Removed,
@@ -49,6 +86,9 @@ namespace Dredis.Abstractions.Storage
         WrongType
     }
 
+    /// <summary>
+    /// Describes results of reading from a consumer group.
+    /// </summary>
     public enum StreamGroupReadResultStatus
     {
         Ok,
@@ -58,6 +98,9 @@ namespace Dredis.Abstractions.Storage
         InvalidId
     }
 
+    /// <summary>
+    /// Describes results of acknowledging consumer group entries.
+    /// </summary>
     public enum StreamAckResultStatus
     {
         Ok,
@@ -66,30 +109,61 @@ namespace Dredis.Abstractions.Storage
         WrongType
     }
 
+    /// <summary>
+    /// Represents a consumer group read operation result.
+    /// </summary>
     public sealed class StreamGroupReadResult
     {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="StreamGroupReadResult"/> class.
+        /// </summary>
+        /// <param name="status">The read status.</param>
+        /// <param name="results">The stream read results.</param>
         public StreamGroupReadResult(StreamGroupReadResultStatus status, StreamReadResult[] results)
         {
             Status = status;
             Results = results;
         }
 
+        /// <summary>
+        /// Gets the read status.
+        /// </summary>
         public StreamGroupReadResultStatus Status { get; }
+        /// <summary>
+        /// Gets the stream read results.
+        /// </summary>
         public StreamReadResult[] Results { get; }
     }
 
+    /// <summary>
+    /// Represents a consumer group acknowledgment result.
+    /// </summary>
     public sealed class StreamAckResult
     {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="StreamAckResult"/> class.
+        /// </summary>
+        /// <param name="status">The acknowledgment status.</param>
+        /// <param name="count">The number of entries acknowledged.</param>
         public StreamAckResult(StreamAckResultStatus status, long count)
         {
             Status = status;
             Count = count;
         }
 
+        /// <summary>
+        /// Gets the acknowledgment status.
+        /// </summary>
         public StreamAckResultStatus Status { get; }
+        /// <summary>
+        /// Gets the number of entries acknowledged.
+        /// </summary>
         public long Count { get; }
     }
 
+    /// <summary>
+    /// Describes results of a pending entries query.
+    /// </summary>
     public enum StreamPendingResultStatus
     {
         Ok,
@@ -98,8 +172,18 @@ namespace Dredis.Abstractions.Storage
         WrongType
     }
 
+    /// <summary>
+    /// Represents a pending entry in a consumer group.
+    /// </summary>
     public sealed class StreamPendingEntry
     {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="StreamPendingEntry"/> class.
+        /// </summary>
+        /// <param name="id">The entry id.</param>
+        /// <param name="consumer">The consumer name.</param>
+        /// <param name="idleTimeMs">The idle time in milliseconds.</param>
+        /// <param name="deliveryCount">The delivery count.</param>
         public StreamPendingEntry(string id, string consumer, long idleTimeMs, long deliveryCount)
         {
             Id = id;
@@ -108,26 +192,64 @@ namespace Dredis.Abstractions.Storage
             DeliveryCount = deliveryCount;
         }
 
+        /// <summary>
+        /// Gets the entry id.
+        /// </summary>
         public string Id { get; }
+        /// <summary>
+        /// Gets the consumer name.
+        /// </summary>
         public string Consumer { get; }
+        /// <summary>
+        /// Gets the idle time in milliseconds.
+        /// </summary>
         public long IdleTimeMs { get; }
+        /// <summary>
+        /// Gets the delivery count.
+        /// </summary>
         public long DeliveryCount { get; }
     }
 
+    /// <summary>
+    /// Summarizes pending entries for a consumer.
+    /// </summary>
     public sealed class StreamPendingConsumerInfo
     {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="StreamPendingConsumerInfo"/> class.
+        /// </summary>
+        /// <param name="name">The consumer name.</param>
+        /// <param name="count">The pending entry count.</param>
         public StreamPendingConsumerInfo(string name, long count)
         {
             Name = name;
             Count = count;
         }
 
+        /// <summary>
+        /// Gets the consumer name.
+        /// </summary>
         public string Name { get; }
+        /// <summary>
+        /// Gets the pending entry count.
+        /// </summary>
         public long Count { get; }
     }
 
+    /// <summary>
+    /// Represents the result of a pending entries query.
+    /// </summary>
     public sealed class StreamPendingResult
     {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="StreamPendingResult"/> class.
+        /// </summary>
+        /// <param name="status">The result status.</param>
+        /// <param name="count">The total pending count.</param>
+        /// <param name="smallestId">The smallest pending id.</param>
+        /// <param name="largestId">The largest pending id.</param>
+        /// <param name="consumers">The per-consumer counts.</param>
+        /// <param name="entries">The pending entries (extended form).</param>
         public StreamPendingResult(
             StreamPendingResultStatus status,
             long count,
@@ -144,14 +266,35 @@ namespace Dredis.Abstractions.Storage
             Entries = entries;
         }
 
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
         public StreamPendingResultStatus Status { get; }
+        /// <summary>
+        /// Gets the total pending count.
+        /// </summary>
         public long Count { get; }
+        /// <summary>
+        /// Gets the smallest pending id, if available.
+        /// </summary>
         public string? SmallestId { get; }
+        /// <summary>
+        /// Gets the largest pending id, if available.
+        /// </summary>
         public string? LargestId { get; }
+        /// <summary>
+        /// Gets per-consumer pending counts.
+        /// </summary>
         public StreamPendingConsumerInfo[] Consumers { get; }
+        /// <summary>
+        /// Gets pending entries when using extended form.
+        /// </summary>
         public StreamPendingEntry[] Entries { get; }
     }
 
+    /// <summary>
+    /// Describes results of claiming pending entries.
+    /// </summary>
     public enum StreamClaimResultStatus
     {
         Ok,
@@ -160,15 +303,29 @@ namespace Dredis.Abstractions.Storage
         WrongType
     }
 
+    /// <summary>
+    /// Represents the result of a claim operation.
+    /// </summary>
     public sealed class StreamClaimResult
     {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="StreamClaimResult"/> class.
+        /// </summary>
+        /// <param name="status">The claim status.</param>
+        /// <param name="entries">The claimed entries.</param>
         public StreamClaimResult(StreamClaimResultStatus status, StreamEntry[] entries)
         {
             Status = status;
             Entries = entries;
         }
 
+        /// <summary>
+        /// Gets the claim status.
+        /// </summary>
         public StreamClaimResultStatus Status { get; }
+        /// <summary>
+        /// Gets the claimed entries.
+        /// </summary>
         public StreamEntry[] Entries { get; }
     }
 
