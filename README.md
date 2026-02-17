@@ -32,7 +32,7 @@ Notes:
 | Counters | Yes | `INCR`, `INCRBY`, `DECR`, `DECRBY` |
 | Expiration | Yes | `EXPIRE`, `PEXPIRE`, `TTL`, `PTTL` |
 | Hashes | Yes | `HSET`, `HGET`, `HDEL`, `HGETALL` |
-| Streams | Partial | `XADD`, `XDEL`, `XLEN`, `XRANGE`, `XREAD` |
+| Streams | Partial | `XADD`, `XDEL`, `XLEN`, `XRANGE`, `XREAD` (supports `BLOCK`) |
 | Consumer groups | Yes | `XGROUP CREATE/DESTROY`, `XREADGROUP`, `XACK`, `XPENDING`, `XCLAIM` |
 | Lists | No | Planned |
 | Sets | No | Planned |
@@ -42,7 +42,6 @@ Notes:
 
 ## Short roadmap
 
-- Streams: Better `BLOCK` behavior for `XREAD`
 - Lists: `LPUSH`, `RPUSH`, `LPOP`, `RPOP`, `LRANGE`
 - Sets: `SADD`, `SREM`, `SMEMBERS`, `SCARD`
 - Sorted sets: `ZADD`, `ZREM`, `ZRANGE`, `ZCARD`
