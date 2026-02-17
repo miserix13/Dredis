@@ -16,6 +16,7 @@ Currently implemented RESP commands and behavior:
 - Sets: `SADD`, `SREM`, `SMEMBERS`, `SCARD`
 - Sorted sets: `ZADD`, `ZREM`, `ZRANGE`, `ZCARD`, `ZSCORE`, `ZRANGEBYSCORE`
 - Streams: `XADD`, `XDEL`, `XLEN`, `XTRIM`, `XRANGE`, `XREVRANGE`, `XREAD`, `XINFO`, `XSETID`, `XGROUP CREATE`, `XGROUP DESTROY`, `XGROUP SETID`, `XGROUP DELCONSUMER`, `XREADGROUP`, `XACK`, `XPENDING`, `XCLAIM`
+- Pub/Sub: `PUBLISH`, `SUBSCRIBE`
 
 Notes:
 
@@ -26,6 +27,8 @@ Notes:
 - `XINFO` supports `STREAM`, `GROUPS`, and `CONSUMERS`.
 - `ZRANGE` and `ZRANGEBYSCORE` both support `WITHSCORES` option.
 - Consumer groups track pending entries with delivery count, idle time, and consumer ownership.
+- `PUBLISH` returns the number of clients that received the message.
+- `SUBSCRIBE` sends subscription confirmations and receives published messages via push messages.
 
 ## Feature matrix
 
@@ -42,11 +45,11 @@ Notes:
 | Sorted sets | Yes | `ZADD`, `ZREM`, `ZRANGE`, `ZCARD`, `ZSCORE`, `ZRANGEBYSCORE` |
 | Streams | Yes | `XADD`, `XDEL`, `XLEN`, `XTRIM`, `XRANGE`, `XREVRANGE`, `XREAD`, `XINFO`, `XSETID` |
 | Consumer groups | Yes | `XGROUP CREATE/DESTROY/SETID/DELCONSUMER`, `XREADGROUP`, `XACK`, `XPENDING`, `XCLAIM` |
+| Pub/Sub | Yes | `PUBLISH`, `SUBSCRIBE` |
 | Additional sorted sets | No | Planned: `ZINCRBY`, `ZCOUNT`, `ZRANK`, `ZREVRANK`, `ZREMRANGEBYSCORE` |
-| Pub/Sub | No | Planned |
 | Transactions | No | Planned |
 
 ## Short roadmap
 
 - Additional sorted set commands: `ZINCRBY`, `ZCOUNT`, `ZRANK`, `ZREVRANK`, `ZREMRANGEBYSCORE`
-- Pub/Sub: `SUBSCRIBE`, `PUBLISH`
+- Unsubscribe support: `UNSUBSCRIBE`, `PSUBSCRIBE`, `PUNSUBSCRIBE` (pattern-based subscriptions)

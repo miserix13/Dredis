@@ -1168,6 +1168,120 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        public async Task Publish_NoSubscribers_ReturnsZero()
+        {
+            DredisCommandHandler.PubSubManager.Clear();
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("PUBLISH", "channel1", "hello"));
+                channel.RunPendingTasks();
+                var response = ReadOutbound(channel);
+                var integer = Assert.IsType<IntegerRedisMessage>(response);
+                Assert.Equal(0, integer.Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task Subscribe_SendsSubscriptionConfirmation()
+        {
+            DredisCommandHandler.PubSubManager.Clear();
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("SUBSCRIBE", "channel1", "channel2"));
+                channel.RunPendingTasks();
+
+                // First subscription confirmation
+                var response1 = ReadOutbound(channel);
+                var array1 = Assert.IsType<ArrayRedisMessage>(response1);
+                Assert.Equal(3, array1.Children.Count);
+
+                var type1 = Assert.IsType<FullBulkStringRedisMessage>(array1.Children[0]);
+                AssertBulkStringEqual(type1, "subscribe");
+
+                var channel_name1 = Assert.IsType<FullBulkStringRedisMessage>(array1.Children[1]);
+                AssertBulkStringEqual(channel_name1, "channel1");
+
+                var count1 = Assert.IsType<IntegerRedisMessage>(array1.Children[2]);
+                Assert.Equal(1, count1.Value);
+
+                // Second subscription confirmation
+                var response2 = ReadOutbound(channel);
+                var array2 = Assert.IsType<ArrayRedisMessage>(response2);
+                Assert.Equal(3, array2.Children.Count);
+
+                var type2 = Assert.IsType<FullBulkStringRedisMessage>(array2.Children[0]);
+                AssertBulkStringEqual(type2, "subscribe");
+
+                var channel_name2 = Assert.IsType<FullBulkStringRedisMessage>(array2.Children[1]);
+                AssertBulkStringEqual(channel_name2, "channel2");
+
+                var count2 = Assert.IsType<IntegerRedisMessage>(array2.Children[2]);
+                Assert.Equal(2, count2.Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task Publish_WithSubscriber_ReturnCountAndDeliversMessage()
+        {
+            DredisCommandHandler.PubSubManager.Clear();
+            var store = new InMemoryKeyValueStore();
+            var publisher = new EmbeddedChannel(new DredisCommandHandler(store));
+            var subscriber = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                // Subscriber subscribes to channel
+                subscriber.WriteInbound(Command("SUBSCRIBE", "events"));
+                subscriber.RunPendingTasks();
+                
+                // Read subscription confirmation
+                _ = ReadOutbound(subscriber);
+
+                // Publisher publishes a message
+                publisher.WriteInbound(Command("PUBLISH", "events", "hello"));
+                publisher.RunPendingTasks();
+                
+                // Publisher gets subscriber count
+                var publishResponse = ReadOutbound(publisher);
+                var integer = Assert.IsType<IntegerRedisMessage>(publishResponse);
+                Assert.Equal(1, integer.Value);
+
+                // Subscriber receives message
+                var messageResponse = ReadOutbound(subscriber);
+                var messageArray = Assert.IsType<ArrayRedisMessage>(messageResponse);
+                Assert.Equal(3, messageArray.Children.Count);
+
+                var messageType = Assert.IsType<FullBulkStringRedisMessage>(messageArray.Children[0]);
+                AssertBulkStringEqual(messageType, "message");
+
+                var channelName = Assert.IsType<FullBulkStringRedisMessage>(messageArray.Children[1]);
+                AssertBulkStringEqual(channelName, "events");
+
+                var messageData = Assert.IsType<FullBulkStringRedisMessage>(messageArray.Children[2]);
+                AssertBulkStringEqual(messageData, "hello");
+            }
+            finally
+            {
+                await publisher.CloseAsync();
+                await subscriber.CloseAsync();
+            }
+        }
+
+        [Fact]
         /// <summary>
         /// Verifies XADD and XLEN return expected stream length.
         /// </summary>
@@ -2255,6 +2369,15 @@ namespace Dredis.Tests
             var buffer = new byte[length];
             message.Content.GetBytes(message.Content.ReaderIndex, buffer, 0, length);
             return Utf8.GetString(buffer, 0, length);
+        }
+
+        /// <summary>
+        /// Asserts that a bulk string message contains the expected string value.
+        /// </summary>
+        private static void AssertBulkStringEqual(FullBulkStringRedisMessage message, string expected)
+        {
+            var actual = GetBulkString(message);
+            Assert.Equal(expected, actual);
         }
 
         /// <summary>

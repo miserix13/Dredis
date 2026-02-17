@@ -9,12 +9,121 @@ using Dredis.Abstractions.Storage;
 namespace Dredis
 {
     /// <summary>
+    /// Manages Pub/Sub subscriptions for Redis channels.
+    /// </summary>
+    public sealed class PubSubManager
+    {
+        private readonly Dictionary<string, HashSet<IChannelHandlerContext>> _subscriptions = new(StringComparer.Ordinal);
+        private readonly object _lock = new object();
+
+        /// <summary>
+        /// Subscribes a channel context to one or more channels.
+        /// </summary>
+        public void Subscribe(IChannelHandlerContext ctx, params string[] channels)
+        {
+            lock (_lock)
+            {
+                foreach (var channel in channels)
+                {
+                    if (!_subscriptions.TryGetValue(channel, out var subscribers))
+                    {
+                        subscribers = new HashSet<IChannelHandlerContext>();
+                        _subscriptions[channel] = subscribers;
+                    }
+
+                    subscribers.Add(ctx);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Unsubscribes a channel context from one or more channels.
+        /// </summary>
+        public void Unsubscribe(IChannelHandlerContext ctx, params string[] channels)
+        {
+            lock (_lock)
+            {
+                foreach (var channel in channels)
+                {
+                    if (_subscriptions.TryGetValue(channel, out var subscribers))
+                    {
+                        subscribers.Remove(ctx);
+                        if (subscribers.Count == 0)
+                        {
+                            _subscriptions.Remove(channel);
+                        }
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Publishes a message to a channel and returns the number of subscribers.
+        /// </summary>
+        public int Publish(string channel, byte[] message)
+        {
+            lock (_lock)
+            {
+                if (!_subscriptions.TryGetValue(channel, out var subscribers))
+                {
+                    return 0;
+                }
+
+                var message_array = new IRedisMessage[]
+                {
+                    new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Encoding.UTF8.GetBytes("message"))),
+                    new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Encoding.UTF8.GetBytes(channel))),
+                    new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(message))
+                };
+
+                foreach (var ctx in subscribers)
+                {
+                    if (ctx.Channel.Active)
+                    {
+                        ctx.WriteAndFlushAsync(new ArrayRedisMessage(message_array));
+                    }
+                }
+
+                return subscribers.Count;
+            }
+        }
+
+        /// <summary>
+        /// Gets the number of subscribers for a channel.
+        /// </summary>
+        public int GetSubscriberCount(string channel)
+        {
+            lock (_lock)
+            {
+                return _subscriptions.TryGetValue(channel, out var subscribers) ? subscribers.Count : 0;
+            }
+        }
+
+        /// <summary>
+        /// Clears all subscriptions (for testing).
+        /// </summary>
+        public void Clear()
+        {
+            lock (_lock)
+            {
+                _subscriptions.Clear();
+            }
+        }
+    }
+
+    /// <summary>
     /// Bridges Redis commands (via DotNetty codec) to the IKeyValueStore abstraction.
     /// </summary>
     public sealed class DredisCommandHandler : SimpleChannelInboundHandler<IRedisMessage>
     {
         private readonly IKeyValueStore _store;
         private static readonly Encoding Utf8 = new UTF8Encoding(false);
+        private static readonly PubSubManager PubSub = new PubSubManager();
+
+        /// <summary>
+        /// Gets the Pub/Sub manager (exposed for testing).
+        /// </summary>
+        public static PubSubManager PubSubManager => PubSub;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="DredisCommandHandler"/> class.
@@ -214,6 +323,14 @@ namespace Dredis
 
                 case "ZRANGEBYSCORE":
                     await HandleSortedSetRangeByScoreAsync(ctx, elements);
+                    break;
+
+                case "PUBLISH":
+                    await HandlePublishAsync(ctx, elements);
+                    break;
+
+                case "SUBSCRIBE":
+                    await HandleSubscribeAsync(ctx, elements);
                     break;
 
                 case "XADD":
@@ -1219,6 +1336,74 @@ namespace Dredis
             }
 
             WriteArray(ctx, withScoreChildren);
+        }
+
+        private async Task HandlePublishAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'publish' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var channel))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            if (!TryGetBytes(args[2], out var message))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var subscribers = PubSub.Publish(channel, message);
+            WriteInteger(ctx, subscribers);
+        }
+
+        private Task HandleSubscribeAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count < 2)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'subscribe' command");
+                return Task.CompletedTask;
+            }
+
+            var channels = new List<string>();
+            for (int i = 1; i < args.Count; i++)
+            {
+                if (!TryGetString(args[i], out var channel))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return Task.CompletedTask;
+                }
+
+                channels.Add(channel);
+            }
+
+            // Subscribe to all channels
+            for (int i = 0; i < channels.Count; i++)
+            {
+                var channel = channels[i];
+                PubSub.Subscribe(ctx, channel);
+                
+                // Send subscription confirmation: ["subscribe", channel, subscription_count]
+                // subscription_count is the number of channels this client is now subscribed to
+                var subscriptionMsg = new IRedisMessage[]
+                {
+                    new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes("subscribe"))),
+                    new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(channel))),
+                    new IntegerRedisMessage(i + 1)
+                };
+                ctx.WriteAndFlushAsync(new ArrayRedisMessage(subscriptionMsg));
+            }
+
+            return Task.CompletedTask;
         }
 
         /// <summary>
