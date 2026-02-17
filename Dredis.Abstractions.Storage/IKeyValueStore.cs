@@ -302,6 +302,87 @@ namespace Dredis.Abstractions.Storage
     }
 
     /// <summary>
+    /// Describes results of sorted set operations.
+    /// </summary>
+    public enum SortedSetResultStatus
+    {
+        Ok,
+        WrongType
+    }
+
+    /// <summary>
+    /// Represents a sorted set entry.
+    /// </summary>
+    public sealed class SortedSetEntry
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="SortedSetEntry"/> class.
+        /// </summary>
+        public SortedSetEntry(byte[] member, double score)
+        {
+            Member = member;
+            Score = score;
+        }
+
+        /// <summary>
+        /// Gets the member.
+        /// </summary>
+        public byte[] Member { get; }
+        /// <summary>
+        /// Gets the score.
+        /// </summary>
+        public double Score { get; }
+    }
+
+    /// <summary>
+    /// Represents a sorted set count result.
+    /// </summary>
+    public sealed class SortedSetCountResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="SortedSetCountResult"/> class.
+        /// </summary>
+        public SortedSetCountResult(SortedSetResultStatus status, long count)
+        {
+            Status = status;
+            Count = count;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public SortedSetResultStatus Status { get; }
+        /// <summary>
+        /// Gets the count.
+        /// </summary>
+        public long Count { get; }
+    }
+
+    /// <summary>
+    /// Represents a sorted set range result.
+    /// </summary>
+    public sealed class SortedSetRangeResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="SortedSetRangeResult"/> class.
+        /// </summary>
+        public SortedSetRangeResult(SortedSetResultStatus status, SortedSetEntry[] entries)
+        {
+            Status = status;
+            Entries = entries;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public SortedSetResultStatus Status { get; }
+        /// <summary>
+        /// Gets the entries.
+        /// </summary>
+        public SortedSetEntry[] Entries { get; }
+    }
+
+    /// <summary>
     /// Describes results of setting a stream's last id.
     /// </summary>
     public enum StreamSetIdResultStatus
@@ -1078,6 +1159,54 @@ namespace Dredis.Abstractions.Storage
         /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
         /// <returns>A task that represents the asynchronous operation. The task result contains the set count.</returns>
         Task<SetCountResult> SetCardinalityAsync(
+            string key,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Adds one or more members to a sorted set.
+        /// </summary>
+        /// <param name="key">The sorted set key.</param>
+        /// <param name="entries">The entries to add.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the number added.</returns>
+        Task<SortedSetCountResult> SortedSetAddAsync(
+            string key,
+            SortedSetEntry[] entries,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Removes one or more members from a sorted set.
+        /// </summary>
+        /// <param name="key">The sorted set key.</param>
+        /// <param name="members">Members to remove.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the number removed.</returns>
+        Task<SortedSetCountResult> SortedSetRemoveAsync(
+            string key,
+            byte[][] members,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Returns a range of members in a sorted set.
+        /// </summary>
+        /// <param name="key">The sorted set key.</param>
+        /// <param name="start">Start index.</param>
+        /// <param name="stop">Stop index (inclusive).</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains entries.</returns>
+        Task<SortedSetRangeResult> SortedSetRangeAsync(
+            string key,
+            int start,
+            int stop,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Returns the cardinality of a sorted set.
+        /// </summary>
+        /// <param name="key">The sorted set key.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the set count.</returns>
+        Task<SortedSetCountResult> SortedSetCardinalityAsync(
             string key,
             CancellationToken token = default);
 

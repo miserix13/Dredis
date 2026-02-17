@@ -938,6 +938,124 @@ namespace Dredis.Tests
 
         [Fact]
         /// <summary>
+        /// Verifies ZADD returns count and ZRANGE orders by score.
+        /// </summary>
+        public async Task SortedSet_AddAndRange_ReturnsOrderedMembers()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("ZADD", "zset", "1", "one", "0", "zero", "1", "two"));
+                channel.RunPendingTasks();
+                var added = Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel));
+                Assert.Equal(3, added.Value);
+
+                channel.WriteInbound(Command("ZRANGE", "zset", "0", "-1"));
+                channel.RunPendingTasks();
+                var response = ReadOutbound(channel);
+                var array = Assert.IsType<ArrayRedisMessage>(response);
+                Assert.Equal(3, array.Children.Count);
+                Assert.Equal("zero", GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(array.Children[0])));
+                Assert.Equal("one", GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(array.Children[1])));
+                Assert.Equal("two", GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(array.Children[2])));
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
+        /// Verifies ZRANGE WITHSCORES returns score pairs.
+        /// </summary>
+        public async Task SortedSet_Range_WithScores_ReturnsPairs()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("ZADD", "zset", "2.5", "a"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("ZRANGE", "zset", "0", "-1", "WITHSCORES"));
+                channel.RunPendingTasks();
+                var response = ReadOutbound(channel);
+                var array = Assert.IsType<ArrayRedisMessage>(response);
+                Assert.Equal(2, array.Children.Count);
+                Assert.Equal("a", GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(array.Children[0])));
+                Assert.Equal("2.5", GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(array.Children[1])));
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
+        /// Verifies ZREM removes members and ZCARD returns count.
+        /// </summary>
+        public async Task SortedSet_RemoveAndCardinality()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("ZADD", "zset", "1", "a", "2", "b"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("ZREM", "zset", "a", "c"));
+                channel.RunPendingTasks();
+                var removed = Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel));
+                Assert.Equal(1, removed.Value);
+
+                channel.WriteInbound(Command("ZCARD", "zset"));
+                channel.RunPendingTasks();
+                var count = Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel));
+                Assert.Equal(1, count.Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
+        /// Verifies sorted set commands return WRONGTYPE for non-zset keys.
+        /// </summary>
+        public async Task SortedSet_WrongType_ReturnsError()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("SET", "zset", "value"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("ZADD", "zset", "1", "a"));
+                channel.RunPendingTasks();
+                var response = ReadOutbound(channel);
+                var error = Assert.IsType<ErrorRedisMessage>(response);
+                Assert.Equal("WRONGTYPE Operation against a key holding the wrong kind of value", error.Content);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
         /// Verifies XADD and XLEN return expected stream length.
         /// </summary>
         public async Task XAdd_XLen_ReturnsCount()
@@ -2118,6 +2236,7 @@ namespace Dredis.Tests
         private readonly Dictionary<string, Dictionary<string, byte[]>> _hashes = new(StringComparer.Ordinal);
         private readonly Dictionary<string, List<byte[]>> _lists = new(StringComparer.Ordinal);
         private readonly Dictionary<string, Dictionary<string, byte[]>> _sets = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, Dictionary<string, SortedSetMember>> _sortedSets = new(StringComparer.Ordinal);
         private readonly Dictionary<string, List<StreamEntryModel>> _streams = new(StringComparer.Ordinal);
         private readonly Dictionary<string, StreamId> _streamLastIds = new(StringComparer.Ordinal);
         private readonly Dictionary<string, Dictionary<string, StreamGroupState>> _streamGroups = new(StringComparer.Ordinal);
@@ -2183,6 +2302,26 @@ namespace Dredis.Tests
         }
 
         /// <summary>
+        /// Internal model for a sorted set member.
+        /// </summary>
+        private sealed class SortedSetMember
+        {
+            /// <summary>
+            /// Initializes a new instance of the <see cref="SortedSetMember"/> class.
+            /// </summary>
+            public SortedSetMember(string key, byte[] member, double score)
+            {
+                Key = key;
+                Member = member;
+                Score = score;
+            }
+
+            public string Key { get; }
+            public byte[] Member { get; }
+            public double Score { get; set; }
+        }
+
+        /// <summary>
         /// Represents a parsed stream id for comparison.
         /// </summary>
         private readonly struct StreamId : IComparable<StreamId>
@@ -2218,6 +2357,7 @@ namespace Dredis.Tests
             _hashes.Remove(key);
             _lists.Remove(key);
             _sets.Remove(key);
+            _sortedSets.Remove(key);
             _streams.Remove(key);
             _streamLastIds.Remove(key);
             _streamGroups.Remove(key);
@@ -2258,6 +2398,7 @@ namespace Dredis.Tests
             _hashes.Remove(key);
             _lists.Remove(key);
             _sets.Remove(key);
+            _sortedSets.Remove(key);
             _streams.Remove(key);
             _streamLastIds.Remove(key);
             _streamGroups.Remove(key);
@@ -2299,6 +2440,7 @@ namespace Dredis.Tests
                 _hashes.Remove(item.Key);
                 _lists.Remove(item.Key);
                 _sets.Remove(item.Key);
+                _sortedSets.Remove(item.Key);
                 _streams.Remove(item.Key);
                 _streamLastIds.Remove(item.Key);
                 _streamGroups.Remove(item.Key);
@@ -2506,6 +2648,7 @@ namespace Dredis.Tests
                 _hashes.Remove(key);
                 _lists.Remove(key);
                 _sets.Remove(key);
+                _sortedSets.Remove(key);
             }
 
             var lastId = _streamLastIds.TryGetValue(key, out var last) ? last : new StreamId(-1, -1);
@@ -3507,6 +3650,7 @@ namespace Dredis.Tests
                 _data.Remove(key);
                 _lists.Remove(key);
                 _sets.Remove(key);
+                _sortedSets.Remove(key);
                 _streams.Remove(key);
                 _streamLastIds.Remove(key);
                 _streamGroups.Remove(key);
@@ -3610,7 +3754,7 @@ namespace Dredis.Tests
                 RemoveKey(key);
             }
 
-            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _sets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _sets.ContainsKey(key) || _sortedSets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
             {
                 return Task.FromResult(new ListPushResult(ListResultStatus.WrongType, 0));
             }
@@ -3622,6 +3766,7 @@ namespace Dredis.Tests
                 _data.Remove(key);
                 _hashes.Remove(key);
                 _sets.Remove(key);
+                _sortedSets.Remove(key);
                 _streams.Remove(key);
                 _streamLastIds.Remove(key);
                 _streamGroups.Remove(key);
@@ -3655,7 +3800,7 @@ namespace Dredis.Tests
                 RemoveKey(key);
             }
 
-            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _sets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _sets.ContainsKey(key) || _sortedSets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
             {
                 return Task.FromResult(new ListPopResult(ListResultStatus.WrongType, null));
             }
@@ -3701,7 +3846,7 @@ namespace Dredis.Tests
                 RemoveKey(key);
             }
 
-            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _sets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _sets.ContainsKey(key) || _sortedSets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
             {
                 return Task.FromResult(new ListRangeResult(ListResultStatus.WrongType, Array.Empty<byte[]>()));
             }
@@ -3760,7 +3905,7 @@ namespace Dredis.Tests
                 RemoveKey(key);
             }
 
-            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _sets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _sets.ContainsKey(key) || _sortedSets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
             {
                 return Task.FromResult(new ListLengthResult(ListResultStatus.WrongType, 0));
             }
@@ -3780,7 +3925,7 @@ namespace Dredis.Tests
                 RemoveKey(key);
             }
 
-            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _sets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _sets.ContainsKey(key) || _sortedSets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
             {
                 return Task.FromResult(new ListIndexResult(ListResultStatus.WrongType, null));
             }
@@ -3813,7 +3958,7 @@ namespace Dredis.Tests
                 RemoveKey(key);
             }
 
-            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _sets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _sets.ContainsKey(key) || _sortedSets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
             {
                 return Task.FromResult(new ListSetResult(ListSetResultStatus.WrongType));
             }
@@ -3847,7 +3992,7 @@ namespace Dredis.Tests
                 RemoveKey(key);
             }
 
-            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _sets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _sets.ContainsKey(key) || _sortedSets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
             {
                 return Task.FromResult(ListResultStatus.WrongType);
             }
@@ -3907,7 +4052,7 @@ namespace Dredis.Tests
                 RemoveKey(key);
             }
 
-            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _sortedSets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
             {
                 return Task.FromResult(new SetCountResult(SetResultStatus.WrongType, 0));
             }
@@ -3919,6 +4064,7 @@ namespace Dredis.Tests
                 _data.Remove(key);
                 _hashes.Remove(key);
                 _lists.Remove(key);
+                _sortedSets.Remove(key);
                 _streams.Remove(key);
                 _streamLastIds.Remove(key);
                 _streamGroups.Remove(key);
@@ -3951,7 +4097,7 @@ namespace Dredis.Tests
                 RemoveKey(key);
             }
 
-            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _sortedSets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
             {
                 return Task.FromResult(new SetCountResult(SetResultStatus.WrongType, 0));
             }
@@ -3992,7 +4138,7 @@ namespace Dredis.Tests
                 RemoveKey(key);
             }
 
-            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _sortedSets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
             {
                 return Task.FromResult(new SetMembersResult(SetResultStatus.WrongType, Array.Empty<byte[]>()));
             }
@@ -4022,7 +4168,7 @@ namespace Dredis.Tests
                 RemoveKey(key);
             }
 
-            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _sortedSets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
             {
                 return Task.FromResult(new SetCountResult(SetResultStatus.WrongType, 0));
             }
@@ -4030,6 +4176,181 @@ namespace Dredis.Tests
             return Task.FromResult(_sets.TryGetValue(key, out var set)
                 ? new SetCountResult(SetResultStatus.Ok, set.Count)
                 : new SetCountResult(SetResultStatus.Ok, 0));
+        }
+
+        /// <summary>
+        /// Adds members to a sorted set.
+        /// </summary>
+        public Task<SortedSetCountResult> SortedSetAddAsync(
+            string key,
+            SortedSetEntry[] entries,
+            CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _sets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            {
+                return Task.FromResult(new SortedSetCountResult(SortedSetResultStatus.WrongType, 0));
+            }
+
+            if (!_sortedSets.TryGetValue(key, out var set))
+            {
+                set = new Dictionary<string, SortedSetMember>(StringComparer.Ordinal);
+                _sortedSets[key] = set;
+                _data.Remove(key);
+                _hashes.Remove(key);
+                _lists.Remove(key);
+                _sets.Remove(key);
+                _streams.Remove(key);
+                _streamLastIds.Remove(key);
+                _streamGroups.Remove(key);
+            }
+
+            long added = 0;
+            foreach (var entry in entries)
+            {
+                var encoded = Convert.ToBase64String(entry.Member);
+                if (set.TryGetValue(encoded, out var existing))
+                {
+                    existing.Score = entry.Score;
+                }
+                else
+                {
+                    set[encoded] = new SortedSetMember(encoded, entry.Member, entry.Score);
+                    added++;
+                }
+            }
+
+            return Task.FromResult(new SortedSetCountResult(SortedSetResultStatus.Ok, added));
+        }
+
+        /// <summary>
+        /// Removes members from a sorted set.
+        /// </summary>
+        public Task<SortedSetCountResult> SortedSetRemoveAsync(
+            string key,
+            byte[][] members,
+            CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _sets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            {
+                return Task.FromResult(new SortedSetCountResult(SortedSetResultStatus.WrongType, 0));
+            }
+
+            if (!_sortedSets.TryGetValue(key, out var set) || set.Count == 0)
+            {
+                return Task.FromResult(new SortedSetCountResult(SortedSetResultStatus.Ok, 0));
+            }
+
+            long removed = 0;
+            foreach (var member in members)
+            {
+                var encoded = Convert.ToBase64String(member);
+                if (set.Remove(encoded))
+                {
+                    removed++;
+                }
+            }
+
+            if (set.Count == 0)
+            {
+                _sortedSets.Remove(key);
+                _expirations.Remove(key);
+            }
+
+            return Task.FromResult(new SortedSetCountResult(SortedSetResultStatus.Ok, removed));
+        }
+
+        /// <summary>
+        /// Returns a range of members in a sorted set.
+        /// </summary>
+        public Task<SortedSetRangeResult> SortedSetRangeAsync(
+            string key,
+            int start,
+            int stop,
+            CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _sets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            {
+                return Task.FromResult(new SortedSetRangeResult(SortedSetResultStatus.WrongType, Array.Empty<SortedSetEntry>()));
+            }
+
+            if (!_sortedSets.TryGetValue(key, out var set) || set.Count == 0)
+            {
+                return Task.FromResult(new SortedSetRangeResult(SortedSetResultStatus.Ok, Array.Empty<SortedSetEntry>()));
+            }
+
+            var ordered = set.Values
+                .OrderBy(entry => entry.Score)
+                .ThenBy(entry => entry.Key, StringComparer.Ordinal)
+                .ToList();
+
+            var length = ordered.Count;
+            var startIndex = start < 0 ? length + start : start;
+            var stopIndex = stop < 0 ? length + stop : stop;
+
+            if (startIndex < 0)
+            {
+                startIndex = 0;
+            }
+
+            if (stopIndex < 0)
+            {
+                stopIndex = 0;
+            }
+
+            if (startIndex >= length || stopIndex < startIndex)
+            {
+                return Task.FromResult(new SortedSetRangeResult(SortedSetResultStatus.Ok, Array.Empty<SortedSetEntry>()));
+            }
+
+            if (stopIndex >= length)
+            {
+                stopIndex = length - 1;
+            }
+
+            var count = stopIndex - startIndex + 1;
+            var entries = new SortedSetEntry[count];
+            for (int i = 0; i < count; i++)
+            {
+                var entry = ordered[startIndex + i];
+                entries[i] = new SortedSetEntry(entry.Member, entry.Score);
+            }
+
+            return Task.FromResult(new SortedSetRangeResult(SortedSetResultStatus.Ok, entries));
+        }
+
+        /// <summary>
+        /// Returns the cardinality of a sorted set.
+        /// </summary>
+        public Task<SortedSetCountResult> SortedSetCardinalityAsync(string key, CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _sets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            {
+                return Task.FromResult(new SortedSetCountResult(SortedSetResultStatus.WrongType, 0));
+            }
+
+            return Task.FromResult(_sortedSets.TryGetValue(key, out var set)
+                ? new SortedSetCountResult(SortedSetResultStatus.Ok, set.Count)
+                : new SortedSetCountResult(SortedSetResultStatus.Ok, 0));
         }
 
         /// <summary>
@@ -4073,7 +4394,7 @@ namespace Dredis.Tests
                 return false;
             }
 
-            return _data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _sets.ContainsKey(key) || _streams.ContainsKey(key);
+            return _data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _sets.ContainsKey(key) || _sortedSets.ContainsKey(key) || _streams.ContainsKey(key);
         }
 
         /// <summary>
@@ -4098,6 +4419,7 @@ namespace Dredis.Tests
             removed |= _hashes.Remove(key);
             removed |= _lists.Remove(key);
             removed |= _sets.Remove(key);
+            removed |= _sortedSets.Remove(key);
             removed |= _streams.Remove(key);
             _streamLastIds.Remove(key);
             _streamGroups.Remove(key);

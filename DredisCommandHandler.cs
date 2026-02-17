@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text;
 using DotNetty.Buffers;
 using DotNetty.Codecs.Redis.Messages;
@@ -189,6 +190,22 @@ namespace Dredis
 
                 case "SCARD":
                     await HandleSetCardinalityAsync(ctx, elements);
+                    break;
+
+                case "ZADD":
+                    await HandleSortedSetAddAsync(ctx, elements);
+                    break;
+
+                case "ZREM":
+                    await HandleSortedSetRemoveAsync(ctx, elements);
+                    break;
+
+                case "ZRANGE":
+                    await HandleSortedSetRangeAsync(ctx, elements);
+                    break;
+
+                case "ZCARD":
+                    await HandleSortedSetCardinalityAsync(ctx, elements);
                     break;
 
                 case "XADD":
@@ -888,6 +905,201 @@ namespace Dredis
 
             var result = await _store.SetCardinalityAsync(key).ConfigureAwait(false);
             if (result.Status == SetResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            WriteInteger(ctx, result.Count);
+        }
+
+        /// <summary>
+        /// Handles the ZADD command.
+        /// </summary>
+        private async Task HandleSortedSetAddAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count < 4 || (args.Count - 2) % 2 != 0)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'zadd' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var entryCount = (args.Count - 2) / 2;
+            var entries = new SortedSetEntry[entryCount];
+            int index = 0;
+            for (int i = 2; i < args.Count; i += 2)
+            {
+                if (!TryGetString(args[i], out var scoreText))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                if (!double.TryParse(scoreText, NumberStyles.Float, CultureInfo.InvariantCulture, out var score) || double.IsNaN(score))
+                {
+                    WriteError(ctx, "ERR value is not a valid float");
+                    return;
+                }
+
+                if (!TryGetBytes(args[i + 1], out var member))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                entries[index++] = new SortedSetEntry(member, score);
+            }
+
+            var result = await _store.SortedSetAddAsync(key, entries).ConfigureAwait(false);
+            if (result.Status == SortedSetResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            WriteInteger(ctx, result.Count);
+        }
+
+        /// <summary>
+        /// Handles the ZREM command.
+        /// </summary>
+        private async Task HandleSortedSetRemoveAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count < 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'zrem' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var members = new byte[args.Count - 2][];
+            for (int i = 2; i < args.Count; i++)
+            {
+                if (!TryGetBytes(args[i], out var value))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                members[i - 2] = value;
+            }
+
+            var result = await _store.SortedSetRemoveAsync(key, members).ConfigureAwait(false);
+            if (result.Status == SortedSetResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            WriteInteger(ctx, result.Count);
+        }
+
+        /// <summary>
+        /// Handles the ZRANGE command.
+        /// </summary>
+        private async Task HandleSortedSetRangeAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 4 && args.Count != 5)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'zrange' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key) ||
+                !TryGetString(args[2], out var startText) ||
+                !TryGetString(args[3], out var stopText))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            if (!int.TryParse(startText, out var start) || !int.TryParse(stopText, out var stop))
+            {
+                WriteError(ctx, "ERR value is not an integer or out of range");
+                return;
+            }
+
+            bool withScores = false;
+            if (args.Count == 5)
+            {
+                if (!TryGetString(args[4], out var option) ||
+                    !string.Equals(option, "WITHSCORES", StringComparison.OrdinalIgnoreCase))
+                {
+                    WriteError(ctx, "ERR syntax error");
+                    return;
+                }
+
+                withScores = true;
+            }
+
+            var result = await _store.SortedSetRangeAsync(key, start, stop).ConfigureAwait(false);
+            if (result.Status == SortedSetResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            if (!withScores)
+            {
+                var children = new IRedisMessage[result.Entries.Length];
+                for (int i = 0; i < result.Entries.Length; i++)
+                {
+                    children[i] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(result.Entries[i].Member));
+                }
+
+                WriteArray(ctx, children);
+                return;
+            }
+
+            var withScoreChildren = new IRedisMessage[result.Entries.Length * 2];
+            for (int i = 0; i < result.Entries.Length; i++)
+            {
+                withScoreChildren[i * 2] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(result.Entries[i].Member));
+                var scoreText = result.Entries[i].Score.ToString("G", CultureInfo.InvariantCulture);
+                withScoreChildren[i * 2 + 1] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(scoreText)));
+            }
+
+            WriteArray(ctx, withScoreChildren);
+        }
+
+        /// <summary>
+        /// Handles the ZCARD command.
+        /// </summary>
+        private async Task HandleSortedSetCardinalityAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 2)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'zcard' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var result = await _store.SortedSetCardinalityAsync(key).ConfigureAwait(false);
+            if (result.Status == SortedSetResultStatus.WrongType)
             {
                 WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
                 return;
