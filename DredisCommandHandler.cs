@@ -947,6 +947,9 @@ namespace Dredis
         /// <summary>
         /// Handles the XREAD command.
         /// </summary>
+        /// <remarks>
+        /// When BLOCK is used, "$" ids are resolved once to preserve last-seen semantics.
+        /// </remarks>
         private async Task HandleXReadAsync(
             IChannelHandlerContext ctx,
             IList<IRedisMessage> args)
