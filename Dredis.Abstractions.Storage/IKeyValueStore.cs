@@ -383,6 +383,30 @@ namespace Dredis.Abstractions.Storage
     }
 
     /// <summary>
+    /// Represents a sorted set score result.
+    /// </summary>
+    public sealed class SortedSetScoreResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="SortedSetScoreResult"/> class.
+        /// </summary>
+        public SortedSetScoreResult(SortedSetResultStatus status, double? score)
+        {
+            Status = status;
+            Score = score;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public SortedSetResultStatus Status { get; }
+        /// <summary>
+        /// Gets the score, or null if member does not exist.
+        /// </summary>
+        public double? Score { get; }
+    }
+
+    /// <summary>
     /// Describes results of setting a stream's last id.
     /// </summary>
     public enum StreamSetIdResultStatus
@@ -1208,6 +1232,32 @@ namespace Dredis.Abstractions.Storage
         /// <returns>A task that represents the asynchronous operation. The task result contains the set count.</returns>
         Task<SortedSetCountResult> SortedSetCardinalityAsync(
             string key,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Returns members from a sorted set within a score range.
+        /// </summary>
+        /// <param name="key">The sorted set key.</param>
+        /// <param name="minScore">Minimum score (inclusive).</param>
+        /// <param name="maxScore">Maximum score (inclusive).</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains entries.</returns>
+        Task<SortedSetRangeResult> SortedSetRangeByScoreAsync(
+            string key,
+            double minScore,
+            double maxScore,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Returns the score of a member in a sorted set.
+        /// </summary>
+        /// <param name="key">The sorted set key.</param>
+        /// <param name="member">The member.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the score.</returns>
+        Task<SortedSetScoreResult> SortedSetScoreAsync(
+            string key,
+            byte[] member,
             CancellationToken token = default);
 
         /// <summary>

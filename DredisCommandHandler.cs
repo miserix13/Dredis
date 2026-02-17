@@ -208,6 +208,14 @@ namespace Dredis
                     await HandleSortedSetCardinalityAsync(ctx, elements);
                     break;
 
+                case "ZSCORE":
+                    await HandleSortedSetScoreAsync(ctx, elements);
+                    break;
+
+                case "ZRANGEBYSCORE":
+                    await HandleSortedSetRangeByScoreAsync(ctx, elements);
+                    break;
+
                 case "XADD":
                     await HandleXAddAsync(ctx, elements);
                     break;
@@ -1106,6 +1114,111 @@ namespace Dredis
             }
 
             WriteInteger(ctx, result.Count);
+        }
+
+        private async Task HandleSortedSetScoreAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'zscore' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            if (!TryGetBytes(args[2], out var member))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var result = await _store.SortedSetScoreAsync(key, member).ConfigureAwait(false);
+            if (result.Status == SortedSetResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            if (result.Score is null)
+            {
+                WriteNullBulkString(ctx);
+                return;
+            }
+
+            WriteBulkString(ctx, Utf8.GetBytes(result.Score.Value.ToString("G17", CultureInfo.InvariantCulture)));
+        }
+
+        private async Task HandleSortedSetRangeByScoreAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count < 4)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'zrangebyscore' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            if (!TryGetString(args[2], out var minScoreStr) || !double.TryParse(minScoreStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var minScore))
+            {
+                WriteError(ctx, "ERR min or max is not a float");
+                return;
+            }
+
+            if (!TryGetString(args[3], out var maxScoreStr) || !double.TryParse(maxScoreStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var maxScore))
+            {
+                WriteError(ctx, "ERR min or max is not a float");
+                return;
+            }
+
+            bool withScores = false;
+            if (args.Count >= 5)
+            {
+                if (TryGetString(args[4], out var option) && option.Equals("WITHSCORES", StringComparison.OrdinalIgnoreCase))
+                {
+                    withScores = true;
+                }
+            }
+
+            var result = await _store.SortedSetRangeByScoreAsync(key, minScore, maxScore).ConfigureAwait(false);
+            if (result.Status == SortedSetResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            if (!withScores)
+            {
+                var children = new IRedisMessage[result.Entries.Length];
+                for (int i = 0; i < result.Entries.Length; i++)
+                {
+                    children[i] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(result.Entries[i].Member));
+                }
+
+                WriteArray(ctx, children);
+                return;
+            }
+
+            var withScoreChildren = new IRedisMessage[result.Entries.Length * 2];
+            for (int i = 0; i < result.Entries.Length; i++)
+            {
+                withScoreChildren[i * 2] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(result.Entries[i].Member));
+                var scoreText = result.Entries[i].Score.ToString("G", CultureInfo.InvariantCulture);
+                withScoreChildren[i * 2 + 1] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(scoreText)));
+            }
+
+            WriteArray(ctx, withScoreChildren);
         }
 
         /// <summary>
