@@ -28,6 +28,7 @@
   <ItemGroup>
     <Compile Remove="Dredis.Tests\**\*.cs" />
     <Compile Remove="Dredis.Tests\obj\**\*.cs" />
+    <Compile Remove="Dredis.Abstractions.Storage\**\*.cs" />
   </ItemGroup>
 
   <ItemGroup>

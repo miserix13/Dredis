@@ -3,6 +3,7 @@ using DotNetty.Codecs.Redis;
 using DotNetty.Transport.Bootstrapping;
 using DotNetty.Transport.Channels;
 using DotNetty.Transport.Channels.Sockets;
+using Dredis.Abstractions.Storage;
 
 namespace Dredis
 {

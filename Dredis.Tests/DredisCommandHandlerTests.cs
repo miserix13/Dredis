@@ -2,6 +2,7 @@ using System.Text;
 using DotNetty.Buffers;
 using DotNetty.Codecs.Redis.Messages;
 using DotNetty.Transport.Channels.Embedded;
+using Dredis.Abstractions.Storage;
 using Xunit;
 
 namespace Dredis.Tests
