@@ -163,6 +163,10 @@ namespace Dredis
                     await HandleXRangeAsync(ctx, elements);
                     break;
 
+                case "XREVRANGE":
+                    await HandleXRevRangeAsync(ctx, elements);
+                    break;
+
                 case "XGROUP":
                     await HandleXGroupAsync(ctx, elements);
                     break;
@@ -1197,6 +1201,75 @@ namespace Dredis
             }
 
             var entries = await _store.StreamRangeAsync(key, start, end, count).ConfigureAwait(false);
+            var entryMessages = new IRedisMessage[entries.Length];
+
+            for (int i = 0; i < entries.Length; i++)
+            {
+                var entry = entries[i];
+                var fieldChildren = new IRedisMessage[entry.Fields.Length * 2];
+
+                for (int j = 0; j < entry.Fields.Length; j++)
+                {
+                    var fieldBytes = Utf8.GetBytes(entry.Fields[j].Key);
+                    fieldChildren[j * 2] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(fieldBytes));
+                    fieldChildren[j * 2 + 1] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(entry.Fields[j].Value));
+                }
+
+                var entryChildren = new IRedisMessage[2]
+                {
+                    new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(entry.Id))),
+                    new ArrayRedisMessage(fieldChildren)
+                };
+
+                entryMessages[i] = new ArrayRedisMessage(entryChildren);
+            }
+
+            WriteArray(ctx, entryMessages);
+        }
+
+        /// <summary>
+        /// Handles the XREVRANGE command.
+        /// </summary>
+        private async Task HandleXRevRangeAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 4 && args.Count != 6)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'xrevrange' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key) ||
+                !TryGetString(args[2], out var start) ||
+                !TryGetString(args[3], out var end))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            if (!IsRangeId(start) || !IsRangeId(end))
+            {
+                WriteError(ctx, "ERR invalid stream id");
+                return;
+            }
+
+            int? count = null;
+            if (args.Count == 6)
+            {
+                if (!TryGetString(args[4], out var countOption) ||
+                    !string.Equals(countOption, "COUNT", StringComparison.OrdinalIgnoreCase) ||
+                    !TryGetString(args[5], out var countText) ||
+                    !int.TryParse(countText, out var parsed) || parsed <= 0)
+                {
+                    WriteError(ctx, "ERR syntax error");
+                    return;
+                }
+
+                count = parsed;
+            }
+
+            var entries = await _store.StreamRangeReverseAsync(key, start, end, count).ConfigureAwait(false);
             var entryMessages = new IRedisMessage[entries.Length];
 
             for (int i = 0; i < entries.Length; i++)

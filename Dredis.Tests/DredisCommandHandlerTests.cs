@@ -854,6 +854,83 @@ namespace Dredis.Tests
 
         [Fact]
         /// <summary>
+        /// Verifies XREVRANGE returns entries in reverse order.
+        /// </summary>
+        public async Task XRevRange_ReturnsEntriesInReverse()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("XADD", "stream", "*", "a", "1"));
+                channel.RunPendingTasks();
+                var firstId = GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel)));
+
+                channel.WriteInbound(Command("XADD", "stream", "*", "b", "2"));
+                channel.RunPendingTasks();
+                var secondId = GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel)));
+
+                channel.WriteInbound(Command("XADD", "stream", "*", "c", "3"));
+                channel.RunPendingTasks();
+                var thirdId = GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel)));
+
+                channel.WriteInbound(Command("XREVRANGE", "stream", "+", "-"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var array = Assert.IsType<ArrayRedisMessage>(response);
+                Assert.Equal(3, array.Children.Count);
+
+                var entries = GetStreamEntries(array.Children);
+                Assert.True(entries.ContainsKey(firstId));
+                Assert.True(entries.ContainsKey(secondId));
+                Assert.True(entries.ContainsKey(thirdId));
+
+                var first = Assert.IsType<ArrayRedisMessage>(array.Children[0]);
+                var firstEntryId = GetBulkOrNull(first.Children[0]);
+                Assert.Equal(thirdId, firstEntryId);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
+        /// Verifies XREVRANGE COUNT limits returned entries.
+        /// </summary>
+        public async Task XRevRange_Count_LimitsEntries()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("XADD", "stream", "*", "a", "1"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("XADD", "stream", "*", "b", "2"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("XREVRANGE", "stream", "+", "-", "COUNT", "1"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var array = Assert.IsType<ArrayRedisMessage>(response);
+                Assert.Single(array.Children);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
         /// Verifies XGROUP CREATE MKSTREAM creates group on empty stream.
         /// </summary>
         public async Task XGroupCreate_MkStream_CreatesGroup()
@@ -2460,6 +2537,59 @@ namespace Dredis.Tests
                 }
 
                 if (entry.ParsedId.CompareTo(endId) > 0)
+                {
+                    break;
+                }
+
+                entries.Add(new StreamEntry(entry.Id, entry.Fields));
+                if (count.HasValue && entries.Count >= count.Value)
+                {
+                    break;
+                }
+            }
+
+            return Task.FromResult(entries.ToArray());
+        }
+
+        /// <summary>
+        /// Returns stream entries within the specified id range, in reverse order.
+        /// </summary>
+        public Task<StreamEntry[]> StreamRangeReverseAsync(
+            string key,
+            string start,
+            string end,
+            int? count,
+            CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+                return Task.FromResult(Array.Empty<StreamEntry>());
+            }
+
+            if (!_streams.TryGetValue(key, out var stream))
+            {
+                return Task.FromResult(Array.Empty<StreamEntry>());
+            }
+
+            var startId = start == "+" ? new StreamId(long.MaxValue, long.MaxValue) : TryParseStreamId(start, out var parsedStart)
+                ? parsedStart
+                : new StreamId(long.MaxValue, long.MaxValue);
+
+            var endId = end == "-" ? new StreamId(-1, -1) : TryParseStreamId(end, out var parsedEnd)
+                ? parsedEnd
+                : new StreamId(-1, -1);
+
+            var entries = new List<StreamEntry>();
+            for (int i = stream.Count - 1; i >= 0; i--)
+            {
+                var entry = stream[i];
+                if (entry.ParsedId.CompareTo(startId) > 0)
+                {
+                    continue;
+                }
+
+                if (entry.ParsedId.CompareTo(endId) < 0)
                 {
                     break;
                 }

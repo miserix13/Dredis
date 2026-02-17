@@ -565,6 +565,22 @@ namespace Dredis.Abstractions.Storage
             CancellationToken token = default);
 
         /// <summary>
+        /// Returns entries in a stream within the specified id range, in reverse order.
+        /// </summary>
+        /// <param name="key">The stream key.</param>
+        /// <param name="start">Start id or '+'.</param>
+        /// <param name="end">End id or '-'.</param>
+        /// <param name="count">Optional maximum number of entries.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains stream entries.</returns>
+        Task<StreamEntry[]> StreamRangeReverseAsync(
+            string key,
+            string start,
+            string end,
+            int? count,
+            CancellationToken token = default);
+
+        /// <summary>
         /// Trims a stream by max length or minimum id and returns the number of entries removed.
         /// </summary>
         /// <param name="key">The stream key.</param>
