@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Linq;
 using System.Text;
 using DotNetty.Buffers;
@@ -1550,7 +1551,7 @@ namespace Dredis.Tests
             for (int i = 0; i < children.Count; i += 2)
             {
                 var field = GetBulkOrNull(children[i]);
-                var value = GetBulkOrNull(children[i + 1]);
+                var value = GetHashValueOrNull(children[i + 1]);
                 if (field != null && value != null)
                 {
                     result[field] = value;
@@ -1558,6 +1559,34 @@ namespace Dredis.Tests
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// Extracts a hash value from RESP messages (bulk, simple, or integer).
+        /// </summary>
+        private static string? GetHashValueOrNull(IRedisMessage message)
+        {
+            if (ReferenceEquals(message, FullBulkStringRedisMessage.Null))
+            {
+                return null;
+            }
+
+            if (message is FullBulkStringRedisMessage bulk)
+            {
+                return GetBulkString(bulk);
+            }
+
+            if (message is SimpleStringRedisMessage simple)
+            {
+                return simple.Content;
+            }
+
+            if (message is IntegerRedisMessage integer)
+            {
+                return integer.Value.ToString(CultureInfo.InvariantCulture);
+            }
+
+            return null;
         }
 
         /// <summary>
