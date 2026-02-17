@@ -175,6 +175,22 @@ namespace Dredis
                     await HandleListTrimAsync(ctx, elements);
                     break;
 
+                case "SADD":
+                    await HandleSetAddAsync(ctx, elements);
+                    break;
+
+                case "SREM":
+                    await HandleSetRemoveAsync(ctx, elements);
+                    break;
+
+                case "SMEMBERS":
+                    await HandleSetMembersAsync(ctx, elements);
+                    break;
+
+                case "SCARD":
+                    await HandleSetCardinalityAsync(ctx, elements);
+                    break;
+
                 case "XADD":
                     await HandleXAddAsync(ctx, elements);
                     break;
@@ -732,6 +748,152 @@ namespace Dredis
             }
 
             WriteSimpleString(ctx, "OK");
+        }
+
+        /// <summary>
+        /// Handles the SADD command.
+        /// </summary>
+        private async Task HandleSetAddAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count < 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'sadd' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var members = new byte[args.Count - 2][];
+            for (int i = 2; i < args.Count; i++)
+            {
+                if (!TryGetBytes(args[i], out var value))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                members[i - 2] = value;
+            }
+
+            var result = await _store.SetAddAsync(key, members).ConfigureAwait(false);
+            if (result.Status == SetResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            WriteInteger(ctx, result.Count);
+        }
+
+        /// <summary>
+        /// Handles the SREM command.
+        /// </summary>
+        private async Task HandleSetRemoveAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count < 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'srem' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var members = new byte[args.Count - 2][];
+            for (int i = 2; i < args.Count; i++)
+            {
+                if (!TryGetBytes(args[i], out var value))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                members[i - 2] = value;
+            }
+
+            var result = await _store.SetRemoveAsync(key, members).ConfigureAwait(false);
+            if (result.Status == SetResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            WriteInteger(ctx, result.Count);
+        }
+
+        /// <summary>
+        /// Handles the SMEMBERS command.
+        /// </summary>
+        private async Task HandleSetMembersAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 2)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'smembers' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var result = await _store.SetMembersAsync(key).ConfigureAwait(false);
+            if (result.Status == SetResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            var children = new IRedisMessage[result.Members.Length];
+            for (int i = 0; i < result.Members.Length; i++)
+            {
+                children[i] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(result.Members[i]));
+            }
+
+            WriteArray(ctx, children);
+        }
+
+        /// <summary>
+        /// Handles the SCARD command.
+        /// </summary>
+        private async Task HandleSetCardinalityAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 2)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'scard' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var result = await _store.SetCardinalityAsync(key).ConfigureAwait(false);
+            if (result.Status == SetResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            WriteInteger(ctx, result.Count);
         }
 
         /// <summary>

@@ -813,6 +813,131 @@ namespace Dredis.Tests
 
         [Fact]
         /// <summary>
+        /// Verifies SADD returns added count and SMEMBERS returns all members.
+        /// </summary>
+        public async Task SetAdd_ReturnsCountAndMembers()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("SADD", "set", "a", "b", "a"));
+                channel.RunPendingTasks();
+                var added = Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel));
+                Assert.Equal(2, added.Value);
+
+                channel.WriteInbound(Command("SMEMBERS", "set"));
+                channel.RunPendingTasks();
+                var response = ReadOutbound(channel);
+                var array = Assert.IsType<ArrayRedisMessage>(response);
+                var members = array.Children
+                    .Select(msg => GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(msg)))
+                    .ToHashSet(StringComparer.Ordinal);
+
+                Assert.Contains("a", members);
+                Assert.Contains("b", members);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
+        /// Verifies SCARD returns set cardinality.
+        /// </summary>
+        public async Task SetCardinality_ReturnsCount()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("SCARD", "set"));
+                channel.RunPendingTasks();
+                var empty = Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel));
+                Assert.Equal(0, empty.Value);
+
+                channel.WriteInbound(Command("SADD", "set", "a", "b"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("SCARD", "set"));
+                channel.RunPendingTasks();
+                var count = Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel));
+                Assert.Equal(2, count.Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
+        /// Verifies SREM removes members and returns count removed.
+        /// </summary>
+        public async Task SetRemove_RemovesMembers()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("SADD", "set", "a", "b"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("SREM", "set", "a", "c"));
+                channel.RunPendingTasks();
+                var removed = Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel));
+                Assert.Equal(1, removed.Value);
+
+                channel.WriteInbound(Command("SMEMBERS", "set"));
+                channel.RunPendingTasks();
+                var response = ReadOutbound(channel);
+                var array = Assert.IsType<ArrayRedisMessage>(response);
+                Assert.Single(array.Children);
+                var member = GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(array.Children[0]));
+                Assert.Equal("b", member);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
+        /// Verifies set commands return WRONGTYPE for non-set keys.
+        /// </summary>
+        public async Task Set_WrongType_ReturnsError()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("SET", "set", "value"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("SADD", "set", "a"));
+                channel.RunPendingTasks();
+                var response = ReadOutbound(channel);
+                var error = Assert.IsType<ErrorRedisMessage>(response);
+                Assert.Equal("WRONGTYPE Operation against a key holding the wrong kind of value", error.Content);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
         /// Verifies XADD and XLEN return expected stream length.
         /// </summary>
         public async Task XAdd_XLen_ReturnsCount()
@@ -1992,6 +2117,7 @@ namespace Dredis.Tests
         private readonly Dictionary<string, byte[]> _data = new(StringComparer.Ordinal);
         private readonly Dictionary<string, Dictionary<string, byte[]>> _hashes = new(StringComparer.Ordinal);
         private readonly Dictionary<string, List<byte[]>> _lists = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, Dictionary<string, byte[]>> _sets = new(StringComparer.Ordinal);
         private readonly Dictionary<string, List<StreamEntryModel>> _streams = new(StringComparer.Ordinal);
         private readonly Dictionary<string, StreamId> _streamLastIds = new(StringComparer.Ordinal);
         private readonly Dictionary<string, Dictionary<string, StreamGroupState>> _streamGroups = new(StringComparer.Ordinal);
@@ -2091,6 +2217,7 @@ namespace Dredis.Tests
             _data[key] = Utf8.GetBytes(value);
             _hashes.Remove(key);
             _lists.Remove(key);
+            _sets.Remove(key);
             _streams.Remove(key);
             _streamLastIds.Remove(key);
             _streamGroups.Remove(key);
@@ -2130,6 +2257,7 @@ namespace Dredis.Tests
             _data[key] = value;
             _hashes.Remove(key);
             _lists.Remove(key);
+            _sets.Remove(key);
             _streams.Remove(key);
             _streamLastIds.Remove(key);
             _streamGroups.Remove(key);
@@ -2170,6 +2298,7 @@ namespace Dredis.Tests
                 _data[item.Key] = item.Value;
                 _hashes.Remove(item.Key);
                 _lists.Remove(item.Key);
+                _sets.Remove(item.Key);
                 _streams.Remove(item.Key);
                 _streamLastIds.Remove(item.Key);
                 _streamGroups.Remove(item.Key);
@@ -2376,6 +2505,7 @@ namespace Dredis.Tests
                 _data.Remove(key);
                 _hashes.Remove(key);
                 _lists.Remove(key);
+                _sets.Remove(key);
             }
 
             var lastId = _streamLastIds.TryGetValue(key, out var last) ? last : new StreamId(-1, -1);
@@ -3376,6 +3506,7 @@ namespace Dredis.Tests
                 _hashes[key] = hash;
                 _data.Remove(key);
                 _lists.Remove(key);
+                _sets.Remove(key);
                 _streams.Remove(key);
                 _streamLastIds.Remove(key);
                 _streamGroups.Remove(key);
@@ -3479,7 +3610,7 @@ namespace Dredis.Tests
                 RemoveKey(key);
             }
 
-            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _sets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
             {
                 return Task.FromResult(new ListPushResult(ListResultStatus.WrongType, 0));
             }
@@ -3490,6 +3621,7 @@ namespace Dredis.Tests
                 _lists[key] = list;
                 _data.Remove(key);
                 _hashes.Remove(key);
+                _sets.Remove(key);
                 _streams.Remove(key);
                 _streamLastIds.Remove(key);
                 _streamGroups.Remove(key);
@@ -3523,7 +3655,7 @@ namespace Dredis.Tests
                 RemoveKey(key);
             }
 
-            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _sets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
             {
                 return Task.FromResult(new ListPopResult(ListResultStatus.WrongType, null));
             }
@@ -3569,7 +3701,7 @@ namespace Dredis.Tests
                 RemoveKey(key);
             }
 
-            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _sets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
             {
                 return Task.FromResult(new ListRangeResult(ListResultStatus.WrongType, Array.Empty<byte[]>()));
             }
@@ -3628,7 +3760,7 @@ namespace Dredis.Tests
                 RemoveKey(key);
             }
 
-            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _sets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
             {
                 return Task.FromResult(new ListLengthResult(ListResultStatus.WrongType, 0));
             }
@@ -3648,7 +3780,7 @@ namespace Dredis.Tests
                 RemoveKey(key);
             }
 
-            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _sets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
             {
                 return Task.FromResult(new ListIndexResult(ListResultStatus.WrongType, null));
             }
@@ -3681,7 +3813,7 @@ namespace Dredis.Tests
                 RemoveKey(key);
             }
 
-            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _sets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
             {
                 return Task.FromResult(new ListSetResult(ListSetResultStatus.WrongType));
             }
@@ -3715,7 +3847,7 @@ namespace Dredis.Tests
                 RemoveKey(key);
             }
 
-            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _sets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
             {
                 return Task.FromResult(ListResultStatus.WrongType);
             }
@@ -3763,6 +3895,144 @@ namespace Dredis.Tests
         }
 
         /// <summary>
+        /// Adds members to a set.
+        /// </summary>
+        public Task<SetCountResult> SetAddAsync(
+            string key,
+            byte[][] members,
+            CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            {
+                return Task.FromResult(new SetCountResult(SetResultStatus.WrongType, 0));
+            }
+
+            if (!_sets.TryGetValue(key, out var set))
+            {
+                set = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+                _sets[key] = set;
+                _data.Remove(key);
+                _hashes.Remove(key);
+                _lists.Remove(key);
+                _streams.Remove(key);
+                _streamLastIds.Remove(key);
+                _streamGroups.Remove(key);
+            }
+
+            long added = 0;
+            foreach (var member in members)
+            {
+                var encoded = Convert.ToBase64String(member);
+                if (!set.ContainsKey(encoded))
+                {
+                    set[encoded] = member;
+                    added++;
+                }
+            }
+
+            return Task.FromResult(new SetCountResult(SetResultStatus.Ok, added));
+        }
+
+        /// <summary>
+        /// Removes members from a set.
+        /// </summary>
+        public Task<SetCountResult> SetRemoveAsync(
+            string key,
+            byte[][] members,
+            CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            {
+                return Task.FromResult(new SetCountResult(SetResultStatus.WrongType, 0));
+            }
+
+            if (!_sets.TryGetValue(key, out var set) || set.Count == 0)
+            {
+                return Task.FromResult(new SetCountResult(SetResultStatus.Ok, 0));
+            }
+
+            long removed = 0;
+            foreach (var member in members)
+            {
+                var encoded = Convert.ToBase64String(member);
+                if (set.Remove(encoded))
+                {
+                    removed++;
+                }
+            }
+
+            if (set.Count == 0)
+            {
+                _sets.Remove(key);
+                _expirations.Remove(key);
+            }
+
+            return Task.FromResult(new SetCountResult(SetResultStatus.Ok, removed));
+        }
+
+        /// <summary>
+        /// Returns all members of a set.
+        /// </summary>
+        public Task<SetMembersResult> SetMembersAsync(
+            string key,
+            CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            {
+                return Task.FromResult(new SetMembersResult(SetResultStatus.WrongType, Array.Empty<byte[]>()));
+            }
+
+            if (!_sets.TryGetValue(key, out var set) || set.Count == 0)
+            {
+                return Task.FromResult(new SetMembersResult(SetResultStatus.Ok, Array.Empty<byte[]>()));
+            }
+
+            var members = new byte[set.Count][];
+            int index = 0;
+            foreach (var value in set.Values)
+            {
+                members[index++] = value;
+            }
+
+            return Task.FromResult(new SetMembersResult(SetResultStatus.Ok, members));
+        }
+
+        /// <summary>
+        /// Returns the cardinality of a set.
+        /// </summary>
+        public Task<SetCountResult> SetCardinalityAsync(string key, CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            {
+                return Task.FromResult(new SetCountResult(SetResultStatus.WrongType, 0));
+            }
+
+            return Task.FromResult(_sets.TryGetValue(key, out var set)
+                ? new SetCountResult(SetResultStatus.Ok, set.Count)
+                : new SetCountResult(SetResultStatus.Ok, 0));
+        }
+
+        /// <summary>
         /// Retrieves a stored value while honoring expiration.
         /// </summary>
         private byte[]? GetValue(string key)
@@ -3803,7 +4073,7 @@ namespace Dredis.Tests
                 return false;
             }
 
-            return _data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _streams.ContainsKey(key);
+            return _data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _sets.ContainsKey(key) || _streams.ContainsKey(key);
         }
 
         /// <summary>
@@ -3827,6 +4097,7 @@ namespace Dredis.Tests
             var removed = _data.Remove(key);
             removed |= _hashes.Remove(key);
             removed |= _lists.Remove(key);
+            removed |= _sets.Remove(key);
             removed |= _streams.Remove(key);
             _streamLastIds.Remove(key);
             _streamGroups.Remove(key);

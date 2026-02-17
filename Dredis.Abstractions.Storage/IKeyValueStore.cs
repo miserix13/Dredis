@@ -245,6 +245,63 @@ namespace Dredis.Abstractions.Storage
     }
 
     /// <summary>
+    /// Describes results of set operations.
+    /// </summary>
+    public enum SetResultStatus
+    {
+        Ok,
+        WrongType
+    }
+
+    /// <summary>
+    /// Represents a set operation result with a count.
+    /// </summary>
+    public sealed class SetCountResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="SetCountResult"/> class.
+        /// </summary>
+        public SetCountResult(SetResultStatus status, long count)
+        {
+            Status = status;
+            Count = count;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public SetResultStatus Status { get; }
+        /// <summary>
+        /// Gets the count for the operation.
+        /// </summary>
+        public long Count { get; }
+    }
+
+    /// <summary>
+    /// Represents a set members result.
+    /// </summary>
+    public sealed class SetMembersResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="SetMembersResult"/> class.
+        /// </summary>
+        public SetMembersResult(SetResultStatus status, byte[][] members)
+        {
+            Status = status;
+            Members = members;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public SetResultStatus Status { get; }
+        /// <summary>
+        /// Gets the members in the set.
+        /// </summary>
+        public byte[][] Members { get; }
+    }
+
+    /// <summary>
     /// Describes results of setting a stream's last id.
     /// </summary>
     public enum StreamSetIdResultStatus
@@ -978,6 +1035,50 @@ namespace Dredis.Abstractions.Storage
             string key,
             int start,
             int stop,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Adds one or more members to a set.
+        /// </summary>
+        /// <param name="key">The set key.</param>
+        /// <param name="members">Members to add.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the number added.</returns>
+        Task<SetCountResult> SetAddAsync(
+            string key,
+            byte[][] members,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Removes one or more members from a set.
+        /// </summary>
+        /// <param name="key">The set key.</param>
+        /// <param name="members">Members to remove.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the number removed.</returns>
+        Task<SetCountResult> SetRemoveAsync(
+            string key,
+            byte[][] members,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Returns all members of a set.
+        /// </summary>
+        /// <param name="key">The set key.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains members.</returns>
+        Task<SetMembersResult> SetMembersAsync(
+            string key,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Returns the cardinality of a set.
+        /// </summary>
+        /// <param name="key">The set key.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the set count.</returns>
+        Task<SetCountResult> SetCardinalityAsync(
+            string key,
             CancellationToken token = default);
 
         /// <summary>
