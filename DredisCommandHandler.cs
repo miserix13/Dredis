@@ -162,6 +162,10 @@ namespace Dredis
                     await HandleXAckAsync(ctx, elements);
                     break;
 
+                case "XPENDING":
+                    await HandleXPendingAsync(ctx, elements);
+                    break;
+
                 default:
                     WriteError(ctx, $"ERR unknown command '{cmd}'");
                     break;
@@ -1408,6 +1412,158 @@ namespace Dredis
             }
 
             WriteInteger(ctx, result.Count);
+        }
+
+        private async Task HandleXPendingAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            // XPENDING key group [[IDLE min-idle-time] start end count [consumer]]
+            if (args.Count < 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'xpending' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key) || !TryGetString(args[2], out var group))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            long? minIdleTimeMs = null;
+            string? start = null;
+            string? end = null;
+            int? count = null;
+            string? consumer = null;
+
+            int argIndex = 3;
+
+            // Check for IDLE option
+            if (argIndex < args.Count && TryGetString(args[argIndex], out var idleArg) &&
+                idleArg.Equals("IDLE", StringComparison.OrdinalIgnoreCase))
+            {
+                argIndex++;
+                if (argIndex >= args.Count || !TryGetString(args[argIndex], out var idleStr) ||
+                    !long.TryParse(idleStr, out var idleValue))
+                {
+                    WriteError(ctx, "ERR invalid idle time");
+                    return;
+                }
+                minIdleTimeMs = idleValue;
+                argIndex++;
+            }
+
+            // Check for extended form (start end count)
+            if (argIndex < args.Count)
+            {
+                if (!TryGetString(args[argIndex], out start) || !IsRangeId(start))
+                {
+                    WriteError(ctx, "ERR invalid stream id");
+                    return;
+                }
+                argIndex++;
+
+                if (argIndex >= args.Count || !TryGetString(args[argIndex], out end) || !IsRangeId(end))
+                {
+                    WriteError(ctx, "ERR invalid stream id");
+                    return;
+                }
+                argIndex++;
+
+                if (argIndex >= args.Count || !TryGetString(args[argIndex], out var countStr) ||
+                    !int.TryParse(countStr, out var countValue) || countValue < 0)
+                {
+                    WriteError(ctx, "ERR invalid count");
+                    return;
+                }
+                count = countValue;
+                argIndex++;
+
+                // Check for optional consumer
+                if (argIndex < args.Count && TryGetString(args[argIndex], out consumer))
+                {
+                    argIndex++;
+                }
+            }
+
+            if (argIndex < args.Count)
+            {
+                WriteError(ctx, "ERR syntax error");
+                return;
+            }
+
+            var result = await _store.StreamPendingAsync(
+                key, group, minIdleTimeMs, start, end, count, consumer).ConfigureAwait(false);
+
+            switch (result.Status)
+            {
+                case StreamPendingResultStatus.WrongType:
+                    WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                    return;
+
+                case StreamPendingResultStatus.NoStream:
+                    WriteError(ctx, "ERR The XPENDING command requires the key to exist");
+                    return;
+
+                case StreamPendingResultStatus.NoGroup:
+                    WriteError(ctx, "NOGROUP No such consumer group");
+                    return;
+            }
+
+            // Extended form - return detailed entries
+            if (result.Entries.Length > 0)
+            {
+                var array = new List<IRedisMessage>();
+                foreach (var entry in result.Entries)
+                {
+                    var entryArray = new List<IRedisMessage>
+                    {
+                        new SimpleStringRedisMessage(entry.Id),
+                        new SimpleStringRedisMessage(entry.Consumer),
+                        new IntegerRedisMessage(entry.IdleTimeMs),
+                        new IntegerRedisMessage(entry.DeliveryCount)
+                    };
+                    array.Add(new ArrayRedisMessage(entryArray));
+                }
+                await ctx.WriteAndFlushAsync(new ArrayRedisMessage(array));
+                return;
+            }
+
+            // Summary form
+            if (result.Count == 0)
+            {
+                var empty = new List<IRedisMessage>
+                {
+                    new IntegerRedisMessage(0),
+                    FullBulkStringRedisMessage.Null,
+                    FullBulkStringRedisMessage.Null,
+                    FullBulkStringRedisMessage.Null
+                };
+                await ctx.WriteAndFlushAsync(new ArrayRedisMessage(empty));
+                return;
+            }
+
+            var summary = new List<IRedisMessage>
+            {
+                new IntegerRedisMessage(result.Count),
+                new SimpleStringRedisMessage(result.SmallestId!),
+                new SimpleStringRedisMessage(result.LargestId!),
+            };
+
+            var consumersList = new List<IRedisMessage>();
+            foreach (var consumerInfo in result.Consumers)
+            {
+                var consumerArray = new List<IRedisMessage>
+                {
+                    new SimpleStringRedisMessage(consumerInfo.Name),
+                    new SimpleStringRedisMessage(consumerInfo.Count.ToString())
+                };
+                consumersList.Add(new ArrayRedisMessage(consumerArray));
+            }
+            summary.Add(new ArrayRedisMessage(consumersList));
+
+            await ctx.WriteAndFlushAsync(new ArrayRedisMessage(summary));
         }
 
         private static bool TryParseStreamIdText(string text)

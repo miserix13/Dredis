@@ -90,6 +90,88 @@ namespace Dredis.Abstractions.Storage
         public long Count { get; }
     }
 
+    public enum StreamPendingResultStatus
+    {
+        Ok,
+        NoGroup,
+        NoStream,
+        WrongType
+    }
+
+    public sealed class StreamPendingEntry
+    {
+        public StreamPendingEntry(string id, string consumer, long idleTimeMs, long deliveryCount)
+        {
+            Id = id;
+            Consumer = consumer;
+            IdleTimeMs = idleTimeMs;
+            DeliveryCount = deliveryCount;
+        }
+
+        public string Id { get; }
+        public string Consumer { get; }
+        public long IdleTimeMs { get; }
+        public long DeliveryCount { get; }
+    }
+
+    public sealed class StreamPendingConsumerInfo
+    {
+        public StreamPendingConsumerInfo(string name, long count)
+        {
+            Name = name;
+            Count = count;
+        }
+
+        public string Name { get; }
+        public long Count { get; }
+    }
+
+    public sealed class StreamPendingResult
+    {
+        public StreamPendingResult(
+            StreamPendingResultStatus status,
+            long count,
+            string? smallestId,
+            string? largestId,
+            StreamPendingConsumerInfo[] consumers,
+            StreamPendingEntry[] entries)
+        {
+            Status = status;
+            Count = count;
+            SmallestId = smallestId;
+            LargestId = largestId;
+            Consumers = consumers;
+            Entries = entries;
+        }
+
+        public StreamPendingResultStatus Status { get; }
+        public long Count { get; }
+        public string? SmallestId { get; }
+        public string? LargestId { get; }
+        public StreamPendingConsumerInfo[] Consumers { get; }
+        public StreamPendingEntry[] Entries { get; }
+    }
+
+    public enum StreamClaimResultStatus
+    {
+        Ok,
+        NoGroup,
+        NoStream,
+        WrongType
+    }
+
+    public sealed class StreamClaimResult
+    {
+        public StreamClaimResult(StreamClaimResultStatus status, StreamEntry[] entries)
+        {
+            Status = status;
+            Entries = entries;
+        }
+
+        public StreamClaimResultStatus Status { get; }
+        public StreamEntry[] Entries { get; }
+    }
+
     /// <summary>
     /// Key-Value Storage abstraction for Dredis.
     /// </summary>
@@ -378,6 +460,29 @@ namespace Dredis.Abstractions.Storage
             string group,
             string[] ids,
             CancellationToken token = default);
+
+        /// <summary>
+        /// Returns pending entries in a consumer group.
+        /// </summary>
+        /// <param name="key">The stream key.</param>
+        /// <param name="group">The consumer group name.</param>
+        /// <param name="minIdleTimeMs">Optional minimum idle time filter in milliseconds.</param>
+        /// <param name="start">Optional start id for range query.</param>
+        /// <param name="end">Optional end id for range query.</param>
+        /// <param name="count">Optional maximum number of entries to return.</param>
+        /// <param name="consumer">Optional consumer name filter.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains pending information.</returns>
+        Task<StreamPendingResult> StreamPendingAsync(
+            string key,
+            string group,
+            long? minIdleTimeMs = null,
+            string? start = null,
+            string? end = null,
+            int? count = null,
+            string? consumer = null,
+            CancellationToken token = default);
+
         /// <summary>
         /// Asynchronously removes all expired keys from the cache.
         /// </summary>

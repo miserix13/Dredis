@@ -815,6 +815,111 @@ namespace Dredis.Tests
             }
         }
 
+        [Fact]
+        public async Task XPending_ReturnsSummaryAndExtendedInfo()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                // Create stream with consumer group
+                channel.WriteInbound(Command("XGROUP", "CREATE", "stream", "group", "-", "MKSTREAM"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                // Add entries
+                channel.WriteInbound(Command("XADD", "stream", "*", "a", "1"));
+                channel.RunPendingTasks();
+                var id1 = GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel)));
+
+                channel.WriteInbound(Command("XADD", "stream", "*", "b", "2"));
+                channel.RunPendingTasks();
+                var id2 = GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel)));
+
+                channel.WriteInbound(Command("XADD", "stream", "*", "c", "3"));
+                channel.RunPendingTasks();
+                var id3 = GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel)));
+
+                // Read entries with consumer1 (creates pending entries)
+                channel.WriteInbound(Command("XREADGROUP", "GROUP", "group", "consumer1", "COUNT", "2", "STREAMS", "stream", ">"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                // Read entry with consumer2
+                channel.WriteInbound(Command("XREADGROUP", "GROUP", "group", "consumer2", "STREAMS", "stream", ">"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                // Test summary form: XPENDING stream group
+                channel.WriteInbound(Command("XPENDING", "stream", "group"));
+                channel.RunPendingTasks();
+
+                var summaryResponse = ReadOutbound(channel);
+                var summaryArray = Assert.IsType<ArrayRedisMessage>(summaryResponse);
+                Assert.Equal(4, summaryArray.Children.Count);
+
+                // Count
+                var count = Assert.IsType<IntegerRedisMessage>(summaryArray.Children[0]);
+                Assert.Equal(3, count.Value);
+
+                // Smallest ID
+                var smallestIdMessage = Assert.IsType<SimpleStringRedisMessage>(summaryArray.Children[1]);
+                var smallestId = smallestIdMessage.Content;
+                Assert.Equal(id1, smallestId);
+
+                // Largest ID
+                var largestIdMessage = Assert.IsType<SimpleStringRedisMessage>(summaryArray.Children[2]);
+                var largestId = largestIdMessage.Content;
+                Assert.Equal(id3, largestId);
+
+                // Consumers
+                var consumers = Assert.IsType<ArrayRedisMessage>(summaryArray.Children[3]);
+                Assert.Equal(2, consumers.Children.Count);
+
+                // Test extended form: XPENDING stream group - + 10
+                channel.WriteInbound(Command("XPENDING", "stream", "group", "-", "+", "10"));
+                channel.RunPendingTasks();
+
+                var extendedResponse = ReadOutbound(channel);
+                var extendedArray = Assert.IsType<ArrayRedisMessage>(extendedResponse);
+                Assert.Equal(3, extendedArray.Children.Count);
+
+                // Each entry should have: [id, consumer, idle_time, delivery_count]
+                var entry1 = Assert.IsType<ArrayRedisMessage>(extendedArray.Children[0]);
+                Assert.Equal(4, entry1.Children.Count);
+                var entryIdMessage = Assert.IsType<SimpleStringRedisMessage>(entry1.Children[0]);
+                var entryId1 = entryIdMessage.Content;
+                Assert.Equal(id1, entryId1);
+
+                // Test with consumer filter
+                channel.WriteInbound(Command("XPENDING", "stream", "group", "-", "+", "10", "consumer1"));
+                channel.RunPendingTasks();
+
+                var filteredResponse = ReadOutbound(channel);
+                var filteredArray = Assert.IsType<ArrayRedisMessage>(filteredResponse);
+                Assert.Equal(2, filteredArray.Children.Count); // Only entries for consumer1
+
+                // Test ACK removes from pending
+                channel.WriteInbound(Command("XACK", "stream", "group", id1));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                // Verify pending count decreased
+                channel.WriteInbound(Command("XPENDING", "stream", "group"));
+                channel.RunPendingTasks();
+
+                var finalSummary = ReadOutbound(channel);
+                var finalArray = Assert.IsType<ArrayRedisMessage>(finalSummary);
+                var finalCount = Assert.IsType<IntegerRedisMessage>(finalArray.Children[0]);
+                Assert.Equal(2, finalCount.Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
         private static IRedisMessage ReadOutbound(EmbeddedChannel channel)
         {
             channel.RunPendingTasks();
@@ -917,11 +1022,25 @@ namespace Dredis.Tests
             public StreamGroupState(StreamId lastDeliveredId)
             {
                 LastDeliveredId = lastDeliveredId;
-                Pending = new HashSet<string>(StringComparer.Ordinal);
+                Pending = new Dictionary<string, PendingEntryInfo>(StringComparer.Ordinal);
             }
 
             public StreamId LastDeliveredId { get; set; }
-            public HashSet<string> Pending { get; }
+            public Dictionary<string, PendingEntryInfo> Pending { get; }
+        }
+
+        private sealed class PendingEntryInfo
+        {
+            public PendingEntryInfo(string consumer, DateTimeOffset deliveryTime, long deliveryCount)
+            {
+                Consumer = consumer;
+                DeliveryTime = deliveryTime;
+                DeliveryCount = deliveryCount;
+            }
+
+            public string Consumer { get; set; }
+            public DateTimeOffset DeliveryTime { get; set; }
+            public long DeliveryCount { get; set; }
         }
 
         private readonly struct StreamId : IComparable<StreamId>
@@ -1403,7 +1522,7 @@ namespace Dredis.Tests
             TimeSpan? block,
             CancellationToken token = default)
         {
-            var initial = TryReadGroup(group, keys, ids, count, allowBlock: false, out var status, out var results);
+            var initial = TryReadGroup(group, consumer, keys, ids, count, allowBlock: false, out var status, out var results);
             if (initial)
             {
                 return new StreamGroupReadResult(status, results);
@@ -1417,7 +1536,7 @@ namespace Dredis.Tests
             if (block.HasValue && block.Value > TimeSpan.Zero)
             {
                 await Task.Delay(block.Value, token);
-                _ = TryReadGroup(group, keys, ids, count, allowBlock: true, out status, out results);
+                _ = TryReadGroup(group, consumer, keys, ids, count, allowBlock: true, out status, out results);
                 return new StreamGroupReadResult(status, results);
             }
 
@@ -1461,6 +1580,132 @@ namespace Dredis.Tests
             }
 
             return Task.FromResult(new StreamAckResult(StreamAckResultStatus.Ok, removed));
+        }
+
+        public Task<StreamPendingResult> StreamPendingAsync(
+            string key,
+            string group,
+            long? minIdleTimeMs = null,
+            string? start = null,
+            string? end = null,
+            int? count = null,
+            string? consumer = null,
+            CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+                return Task.FromResult(new StreamPendingResult(
+                    StreamPendingResultStatus.NoStream, 0, null, null,
+                    Array.Empty<StreamPendingConsumerInfo>(), Array.Empty<StreamPendingEntry>()));
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key))
+            {
+                return Task.FromResult(new StreamPendingResult(
+                    StreamPendingResultStatus.WrongType, 0, null, null,
+                    Array.Empty<StreamPendingConsumerInfo>(), Array.Empty<StreamPendingEntry>()));
+            }
+
+            if (!_streams.ContainsKey(key))
+            {
+                return Task.FromResult(new StreamPendingResult(
+                    StreamPendingResultStatus.NoStream, 0, null, null,
+                    Array.Empty<StreamPendingConsumerInfo>(), Array.Empty<StreamPendingEntry>()));
+            }
+
+            if (!_streamGroups.TryGetValue(key, out var groups) || !groups.TryGetValue(group, out var state))
+            {
+                return Task.FromResult(new StreamPendingResult(
+                    StreamPendingResultStatus.NoGroup, 0, null, null,
+                    Array.Empty<StreamPendingConsumerInfo>(), Array.Empty<StreamPendingEntry>()));
+            }
+
+            var now = DateTimeOffset.UtcNow;
+            var pendingList = state.Pending
+                .Select(p => new
+                {
+                    Id = p.Key,
+                    Info = p.Value,
+                    IdleMs = (long)(now - p.Value.DeliveryTime).TotalMilliseconds
+                })
+                .ToList();
+
+            // Apply filters
+            if (minIdleTimeMs.HasValue)
+            {
+                pendingList = pendingList.Where(p => p.IdleMs >= minIdleTimeMs.Value).ToList();
+            }
+
+            if (!string.IsNullOrEmpty(consumer))
+            {
+                pendingList = pendingList.Where(p => p.Info.Consumer == consumer).ToList();
+            }
+
+            if (!string.IsNullOrEmpty(start) && TryParseStreamId(start, out var startId))
+            {
+                pendingList = pendingList.Where(p =>
+                {
+                    if (TryParseStreamId(p.Id, out var id))
+                    {
+                        return id.CompareTo(startId) >= 0;
+                    }
+                    return false;
+                }).ToList();
+            }
+
+            if (!string.IsNullOrEmpty(end) && TryParseStreamId(end, out var endId))
+            {
+                pendingList = pendingList.Where(p =>
+                {
+                    if (TryParseStreamId(p.Id, out var id))
+                    {
+                        return id.CompareTo(endId) <= 0;
+                    }
+                    return false;
+                }).ToList();
+            }
+
+            // If start/end/count is specified, return extended form
+            if (start != null || end != null || count.HasValue)
+            {
+                var limitedList = count.HasValue
+                    ? pendingList.Take(count.Value).ToList()
+                    : pendingList;
+
+                var entries = limitedList
+                    .Select(p => new StreamPendingEntry(p.Id, p.Info.Consumer, p.IdleMs, p.Info.DeliveryCount))
+                    .ToArray();
+
+                return Task.FromResult(new StreamPendingResult(
+                    StreamPendingResultStatus.Ok, pendingList.Count, null, null,
+                    Array.Empty<StreamPendingConsumerInfo>(), entries));
+            }
+
+            // Return summary form
+            if (pendingList.Count == 0)
+            {
+                return Task.FromResult(new StreamPendingResult(
+                    StreamPendingResultStatus.Ok, 0, null, null,
+                    Array.Empty<StreamPendingConsumerInfo>(), Array.Empty<StreamPendingEntry>()));
+            }
+
+            var orderedIds = pendingList
+                .Select(p => new { p.Id, Parsed = TryParseStreamId(p.Id, out var parsed) ? parsed : new StreamId(0, 0) })
+                .OrderBy(x => x.Parsed)
+                .ToList();
+
+            var smallestId = orderedIds.First().Id;
+            var largestId = orderedIds.Last().Id;
+
+            var consumerCounts = pendingList
+                .GroupBy(p => p.Info.Consumer)
+                .Select(g => new StreamPendingConsumerInfo(g.Key, g.Count()))
+                .ToArray();
+
+            return Task.FromResult(new StreamPendingResult(
+                StreamPendingResultStatus.Ok, pendingList.Count, smallestId, largestId,
+                consumerCounts, Array.Empty<StreamPendingEntry>()));
         }
 
         public Task<StreamEntry[]> StreamRangeAsync(
@@ -1718,6 +1963,7 @@ namespace Dredis.Tests
 
         private bool TryReadGroup(
             string group,
+            string consumer,
             string[] keys,
             string[] ids,
             int? count,
@@ -1772,7 +2018,7 @@ namespace Dredis.Tests
                 {
                     if (usePending)
                     {
-                        if (!state.Pending.Contains(entry.Id))
+                        if (!state.Pending.ContainsKey(entry.Id))
                         {
                             continue;
                         }
@@ -1786,7 +2032,17 @@ namespace Dredis.Tests
                     entries.Add(new StreamEntry(entry.Id, entry.Fields));
                     if (!usePending)
                     {
-                        state.Pending.Add(entry.Id);
+                        var now = DateTimeOffset.UtcNow;
+                        if (state.Pending.TryGetValue(entry.Id, out var existing))
+                        {
+                            existing.DeliveryCount++;
+                            existing.DeliveryTime = now;
+                            existing.Consumer = consumer;
+                        }
+                        else
+                        {
+                            state.Pending[entry.Id] = new PendingEntryInfo(consumer, now, 1);
+                        }
                     }
 
                     if (count.HasValue && entries.Count >= count.Value)
