@@ -12,7 +12,7 @@ Currently implemented RESP commands and behavior:
 - Counters: `INCR`, `INCRBY`, `DECR`, `DECRBY`
 - Expiration: `EXPIRE`, `PEXPIRE`, `TTL`, `PTTL`
 - Hashes: `HSET`, `HGET`, `HDEL`, `HGETALL`
-- Streams: `XADD`, `XDEL`, `XLEN`, `XRANGE`, `XREAD`, `XGROUP CREATE`, `XGROUP DESTROY`, `XREADGROUP`, `XACK`, `XPENDING`, `XCLAIM`
+- Streams: `XADD`, `XDEL`, `XLEN`, `XTRIM`, `XRANGE`, `XREVRANGE`, `XREAD`, `XINFO`, `XSETID`, `XGROUP CREATE`, `XGROUP DESTROY`, `XGROUP SETID`, `XGROUP DELCONSUMER`, `XREADGROUP`, `XACK`, `XPENDING`, `XCLAIM`
 
 Notes:
 
@@ -20,6 +20,7 @@ Notes:
 - `XREADGROUP` supports `COUNT` and `BLOCK`.
 - `XPENDING` supports both summary and extended forms with filtering (IDLE, consumer, range).
 - `XCLAIM` supports all options: `IDLE`, `TIME`, `RETRYCOUNT`, `FORCE`, `JUSTID`.
+- `XINFO` supports `STREAM`, `GROUPS`, and `CONSUMERS`.
 - Consumer groups track pending entries with delivery count, idle time, and consumer ownership.
 
 ## Feature matrix
@@ -32,8 +33,8 @@ Notes:
 | Counters | Yes | `INCR`, `INCRBY`, `DECR`, `DECRBY` |
 | Expiration | Yes | `EXPIRE`, `PEXPIRE`, `TTL`, `PTTL` |
 | Hashes | Yes | `HSET`, `HGET`, `HDEL`, `HGETALL` |
-| Streams | Partial | `XADD`, `XDEL`, `XLEN`, `XRANGE`, `XREAD` (supports `BLOCK`) |
-| Consumer groups | Yes | `XGROUP CREATE/DESTROY`, `XREADGROUP`, `XACK`, `XPENDING`, `XCLAIM` |
+| Streams | Yes | `XADD`, `XDEL`, `XLEN`, `XTRIM`, `XRANGE`, `XREVRANGE`, `XREAD`, `XINFO`, `XSETID` |
+| Consumer groups | Yes | `XGROUP CREATE/DESTROY/SETID/DELCONSUMER`, `XREADGROUP`, `XACK`, `XPENDING`, `XCLAIM` |
 | Lists | No | Planned |
 | Sets | No | Planned |
 | Sorted sets | No | Planned |
