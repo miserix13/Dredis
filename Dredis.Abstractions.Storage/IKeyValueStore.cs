@@ -565,6 +565,22 @@ namespace Dredis.Abstractions.Storage
             CancellationToken token = default);
 
         /// <summary>
+        /// Trims a stream by max length or minimum id and returns the number of entries removed.
+        /// </summary>
+        /// <param name="key">The stream key.</param>
+        /// <param name="maxLength">Optional maximum length for MAXLEN trimming.</param>
+        /// <param name="minId">Optional minimum id for MINID trimming.</param>
+        /// <param name="approximate">If true, use approximate trimming semantics.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the number of entries removed.</returns>
+        Task<long> StreamTrimAsync(
+            string key,
+            int? maxLength = null,
+            string? minId = null,
+            bool approximate = false,
+            CancellationToken token = default);
+
+        /// <summary>
         /// Creates a consumer group for a stream.
         /// </summary>
         /// <param name="key">The stream key.</param>

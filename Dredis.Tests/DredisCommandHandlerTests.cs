@@ -576,6 +576,100 @@ namespace Dredis.Tests
 
         [Fact]
         /// <summary>
+        /// Verifies XTRIM MAXLEN removes the oldest entries.
+        /// </summary>
+        public async Task XTrim_MaxLen_RemovesOldest()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("XADD", "stream", "*", "a", "1"));
+                channel.RunPendingTasks();
+                var id1 = GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel)));
+
+                channel.WriteInbound(Command("XADD", "stream", "*", "b", "2"));
+                channel.RunPendingTasks();
+                var id2 = GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel)));
+
+                channel.WriteInbound(Command("XADD", "stream", "*", "c", "3"));
+                channel.RunPendingTasks();
+                var id3 = GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel)));
+
+                channel.WriteInbound(Command("XTRIM", "stream", "MAXLEN", "2"));
+                channel.RunPendingTasks();
+
+                var trimResponse = ReadOutbound(channel);
+                var trimmed = Assert.IsType<IntegerRedisMessage>(trimResponse);
+                Assert.Equal(1, trimmed.Value);
+
+                channel.WriteInbound(Command("XRANGE", "stream", "-", "+"));
+                channel.RunPendingTasks();
+
+                var rangeResponse = ReadOutbound(channel);
+                var rangeArray = Assert.IsType<ArrayRedisMessage>(rangeResponse);
+                var entries = GetStreamEntries(rangeArray.Children);
+                Assert.Equal(2, entries.Count);
+                Assert.False(entries.ContainsKey(id1));
+                Assert.True(entries.ContainsKey(id2));
+                Assert.True(entries.ContainsKey(id3));
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
+        /// Verifies XTRIM MINID removes entries older than the minimum id.
+        /// </summary>
+        public async Task XTrim_MinId_RemovesOlder()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("XADD", "stream", "*", "a", "1"));
+                channel.RunPendingTasks();
+                var id1 = GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel)));
+
+                channel.WriteInbound(Command("XADD", "stream", "*", "b", "2"));
+                channel.RunPendingTasks();
+                var id2 = GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel)));
+
+                channel.WriteInbound(Command("XADD", "stream", "*", "c", "3"));
+                channel.RunPendingTasks();
+                var id3 = GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel)));
+
+                channel.WriteInbound(Command("XTRIM", "stream", "MINID", id2));
+                channel.RunPendingTasks();
+
+                var trimResponse = ReadOutbound(channel);
+                var trimmed = Assert.IsType<IntegerRedisMessage>(trimResponse);
+                Assert.Equal(1, trimmed.Value);
+
+                channel.WriteInbound(Command("XRANGE", "stream", "-", "+"));
+                channel.RunPendingTasks();
+
+                var rangeResponse = ReadOutbound(channel);
+                var rangeArray = Assert.IsType<ArrayRedisMessage>(rangeResponse);
+                var entries = GetStreamEntries(rangeArray.Children);
+                Assert.Equal(2, entries.Count);
+                Assert.False(entries.ContainsKey(id1));
+                Assert.True(entries.ContainsKey(id2));
+                Assert.True(entries.ContainsKey(id3));
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
         /// Verifies XREAD returns entries after the provided id.
         /// </summary>
         public async Task XRead_ReturnsEntriesAfterId()
@@ -1782,6 +1876,97 @@ namespace Dredis.Tests
             }
 
             return Task.FromResult<string?>(stream[stream.Count - 1].Id);
+        }
+
+        /// <summary>
+        /// Trims a stream by max length or minimum id.
+        /// </summary>
+        public Task<long> StreamTrimAsync(
+            string key,
+            int? maxLength = null,
+            string? minId = null,
+            bool approximate = false,
+            CancellationToken token = default)
+        {
+            _ = approximate;
+
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+                return Task.FromResult(0L);
+            }
+
+            if (!_streams.TryGetValue(key, out var stream) || stream.Count == 0)
+            {
+                return Task.FromResult(0L);
+            }
+
+            var removed = 0L;
+            var removedIds = new List<string>();
+
+            if (maxLength.HasValue)
+            {
+                var target = maxLength.Value;
+                if (target < 0)
+                {
+                    return Task.FromResult(0L);
+                }
+
+                var toRemove = Math.Max(0, stream.Count - target);
+                for (int i = 0; i < toRemove; i++)
+                {
+                    removedIds.Add(stream[i].Id);
+                }
+
+                if (toRemove > 0)
+                {
+                    stream.RemoveRange(0, toRemove);
+                    removed = toRemove;
+                }
+            }
+            else if (!string.IsNullOrEmpty(minId) && TryParseStreamId(minId, out var minParsed))
+            {
+                var toRemove = 0;
+                foreach (var entry in stream)
+                {
+                    if (entry.ParsedId.CompareTo(minParsed) < 0)
+                    {
+                        removedIds.Add(entry.Id);
+                        toRemove++;
+                    }
+                    else
+                    {
+                        break;
+                    }
+                }
+
+                if (toRemove > 0)
+                {
+                    stream.RemoveRange(0, toRemove);
+                    removed = toRemove;
+                }
+            }
+
+            if (removedIds.Count > 0 && _streamGroups.TryGetValue(key, out var groups))
+            {
+                foreach (var state in groups.Values)
+                {
+                    foreach (var id in removedIds)
+                    {
+                        state.Pending.Remove(id);
+                    }
+                }
+            }
+
+            if (stream.Count == 0)
+            {
+                _streams.Remove(key);
+                _streamLastIds.Remove(key);
+                _streamGroups.Remove(key);
+                _expirations.Remove(key);
+            }
+
+            return Task.FromResult(removed);
         }
 
         /// <summary>

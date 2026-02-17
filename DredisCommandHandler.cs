@@ -151,6 +151,10 @@ namespace Dredis
                     await HandleXLenAsync(ctx, elements);
                     break;
 
+                case "XTRIM":
+                    await HandleXTrimAsync(ctx, elements);
+                    break;
+
                 case "XREAD":
                     await HandleXReadAsync(ctx, elements);
                     break;
@@ -942,6 +946,74 @@ namespace Dredis
 
             var length = await _store.StreamLengthAsync(key).ConfigureAwait(false);
             WriteInteger(ctx, length);
+        }
+
+        /// <summary>
+        /// Handles the XTRIM command.
+        /// </summary>
+        private async Task HandleXTrimAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count < 4)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'xtrim' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key) || !TryGetString(args[2], out var strategy))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var approx = false;
+            int index = 3;
+
+            if (index < args.Count && TryGetString(args[index], out var modifier) &&
+                (modifier == "~" || modifier == "="))
+            {
+                approx = modifier == "~";
+                index++;
+            }
+
+            if (index >= args.Count)
+            {
+                WriteError(ctx, "ERR syntax error");
+                return;
+            }
+
+            if (string.Equals(strategy, "MAXLEN", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!TryGetString(args[index], out var lenText) ||
+                    !int.TryParse(lenText, out var maxLen) || maxLen < 0 || index + 1 != args.Count)
+                {
+                    WriteError(ctx, "ERR syntax error");
+                    return;
+                }
+
+                var removed = await _store.StreamTrimAsync(key, maxLength: maxLen, approximate: approx)
+                    .ConfigureAwait(false);
+                WriteInteger(ctx, removed);
+                return;
+            }
+
+            if (string.Equals(strategy, "MINID", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!TryGetString(args[index], out var minId) ||
+                    !TryParseStreamIdText(minId) || index + 1 != args.Count)
+                {
+                    WriteError(ctx, "ERR syntax error");
+                    return;
+                }
+
+                var removed = await _store.StreamTrimAsync(key, minId: minId, approximate: approx)
+                    .ConfigureAwait(false);
+                WriteInteger(ctx, removed);
+                return;
+            }
+
+            WriteError(ctx, "ERR syntax error");
         }
 
         /// <summary>
