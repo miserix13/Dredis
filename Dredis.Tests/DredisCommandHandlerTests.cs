@@ -920,6 +920,151 @@ namespace Dredis.Tests
             }
         }
 
+        [Fact]
+        public async Task XClaim_TransfersPendingEntries()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                // Create stream with consumer group
+                channel.WriteInbound(Command("XGROUP", "CREATE", "stream", "group", "-", "MKSTREAM"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                // Add entries
+                channel.WriteInbound(Command("XADD", "stream", "*", "a", "1"));
+                channel.RunPendingTasks();
+                var id1 = GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel)));
+
+                channel.WriteInbound(Command("XADD", "stream", "*", "b", "2"));
+                channel.RunPendingTasks();
+                var id2 = GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel)));
+
+                channel.WriteInbound(Command("XADD", "stream", "*", "c", "3"));
+                channel.RunPendingTasks();
+                var id3 = GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel)));
+
+                // Consumer1 reads entries (creates pending entries)
+                channel.WriteInbound(Command("XREADGROUP", "GROUP", "group", "consumer1", "COUNT", "2", "STREAMS", "stream", ">"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                // Wait a bit to ensure idle time > 0
+                await Task.Delay(50);
+
+                // Consumer2 claims the entries from consumer1
+                channel.WriteInbound(Command("XCLAIM", "stream", "group", "consumer2", "0", id1, id2));
+                channel.RunPendingTasks();
+
+                var claimResponse = ReadOutbound(channel);
+                var claimArray = Assert.IsType<ArrayRedisMessage>(claimResponse);
+                Assert.Equal(2, claimArray.Children.Count);
+
+                // Verify the entries were returned
+                var entry1 = Assert.IsType<ArrayRedisMessage>(claimArray.Children[0]);
+                var entryId = Assert.IsType<SimpleStringRedisMessage>(entry1.Children[0]);
+                Assert.Equal(id1, entryId.Content);
+
+                // Verify pending entries are now owned by consumer2
+                channel.WriteInbound(Command("XPENDING", "stream", "group", "-", "+", "10", "consumer2"));
+                channel.RunPendingTasks();
+
+                var pendingResponse = ReadOutbound(channel);
+                var pendingArray = Assert.IsType<ArrayRedisMessage>(pendingResponse);
+                Assert.Equal(2, pendingArray.Children.Count); // consumer2 should have 2 entries
+
+                // Test with minimum idle time - shouldn't claim fresh entries
+                channel.WriteInbound(Command("XCLAIM", "stream", "group", "consumer3", "10000", id1, id2));
+                channel.RunPendingTasks();
+
+                var noClaimResponse = ReadOutbound(channel);
+                var noClaimArray = Assert.IsType<ArrayRedisMessage>(noClaimResponse);
+                Assert.Empty(noClaimArray.Children); // No entries claimed due to idle time
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task XClaim_WithOptions()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                // Create stream with consumer group
+                channel.WriteInbound(Command("XGROUP", "CREATE", "stream", "group", "-", "MKSTREAM"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                // Add entry
+                channel.WriteInbound(Command("XADD", "stream", "*", "field", "value"));
+                channel.RunPendingTasks();
+                var id = GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel)));
+
+                // Consumer1 reads the entry
+                channel.WriteInbound(Command("XREADGROUP", "GROUP", "group", "consumer1", "STREAMS", "stream", ">"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                // Test JUSTID option - should return only IDs
+                channel.WriteInbound(Command("XCLAIM", "stream", "group", "consumer2", "0", id, "JUSTID"));
+                channel.RunPendingTasks();
+
+                var justIdResponse = ReadOutbound(channel);
+                var justIdArray = Assert.IsType<ArrayRedisMessage>(justIdResponse);
+                Assert.Single(justIdArray.Children);
+                var returnedId = Assert.IsType<SimpleStringRedisMessage>(justIdArray.Children[0]);
+                Assert.Equal(id, returnedId.Content);
+
+                // Test RETRYCOUNT option
+                channel.WriteInbound(Command("XCLAIM", "stream", "group", "consumer3", "0", id, "RETRYCOUNT", "5"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                // Verify retry count was set
+                channel.WriteInbound(Command("XPENDING", "stream", "group", "-", "+", "10"));
+                channel.RunPendingTasks();
+
+                var pendingResponse = ReadOutbound(channel);
+                var pendingArray = Assert.IsType<ArrayRedisMessage>(pendingResponse);
+                var pendingEntry = Assert.IsType<ArrayRedisMessage>(pendingArray.Children[0]);
+                var deliveryCount = Assert.IsType<IntegerRedisMessage>(pendingEntry.Children[3]);
+                Assert.Equal(5, deliveryCount.Value);
+
+                // Test FORCE option with non-pending entry
+                channel.WriteInbound(Command("XADD", "stream", "*", "field2", "value2"));
+                channel.RunPendingTasks();
+                var id2 = GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel)));
+
+                // FORCE should create a pending entry even though it's not pending
+                channel.WriteInbound(Command("XCLAIM", "stream", "group", "consumer4", "0", id2, "FORCE"));
+                channel.RunPendingTasks();
+
+                var forceResponse = ReadOutbound(channel);
+                var forceArray = Assert.IsType<ArrayRedisMessage>(forceResponse);
+                Assert.Single(forceArray.Children); // Should claim the entry
+
+                // Verify it's now in pending
+                channel.WriteInbound(Command("XPENDING", "stream", "group"));
+                channel.RunPendingTasks();
+
+                var summaryResponse = ReadOutbound(channel);
+                var summaryArray = Assert.IsType<ArrayRedisMessage>(summaryResponse);
+                var totalCount = Assert.IsType<IntegerRedisMessage>(summaryArray.Children[0]);
+                Assert.Equal(2, totalCount.Value); // Both entries should be pending now
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
         private static IRedisMessage ReadOutbound(EmbeddedChannel channel)
         {
             channel.RunPendingTasks();
@@ -1706,6 +1851,109 @@ namespace Dredis.Tests
             return Task.FromResult(new StreamPendingResult(
                 StreamPendingResultStatus.Ok, pendingList.Count, smallestId, largestId,
                 consumerCounts, Array.Empty<StreamPendingEntry>()));
+        }
+
+        public Task<StreamClaimResult> StreamClaimAsync(
+            string key,
+            string group,
+            string consumer,
+            long minIdleTimeMs,
+            string[] ids,
+            long? idleMs = null,
+            long? timeMs = null,
+            long? retryCount = null,
+            bool force = false,
+            CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+                return Task.FromResult(new StreamClaimResult(
+                    StreamClaimResultStatus.NoStream, Array.Empty<StreamEntry>()));
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key))
+            {
+                return Task.FromResult(new StreamClaimResult(
+                    StreamClaimResultStatus.WrongType, Array.Empty<StreamEntry>()));
+            }
+
+            if (!_streams.TryGetValue(key, out var stream))
+            {
+                return Task.FromResult(new StreamClaimResult(
+                    StreamClaimResultStatus.NoStream, Array.Empty<StreamEntry>()));
+            }
+
+            if (!_streamGroups.TryGetValue(key, out var groups) || !groups.TryGetValue(group, out var state))
+            {
+                return Task.FromResult(new StreamClaimResult(
+                    StreamClaimResultStatus.NoGroup, Array.Empty<StreamEntry>()));
+            }
+
+            var now = DateTimeOffset.UtcNow;
+            var claimedEntries = new List<StreamEntry>();
+
+            foreach (var id in ids)
+            {
+                // Find the stream entry
+                var streamEntry = stream.FirstOrDefault(e => e.Id == id);
+                if (streamEntry == null)
+                {
+                    continue;
+                }
+
+                // Check if entry exists in pending
+                if (state.Pending.TryGetValue(id, out var pendingInfo))
+                {
+                    // Check if idle time is sufficient
+                    var idleTime = (long)(now - pendingInfo.DeliveryTime).TotalMilliseconds;
+                    if (idleTime < minIdleTimeMs)
+                    {
+                        continue;
+                    }
+
+                    // Update the pending entry
+                    pendingInfo.Consumer = consumer;
+                    pendingInfo.DeliveryTime = timeMs.HasValue 
+                        ? DateTimeOffset.FromUnixTimeMilliseconds(timeMs.Value) 
+                        : now;
+                    
+                    if (idleMs.HasValue)
+                    {
+                        pendingInfo.DeliveryTime = now.AddMilliseconds(-idleMs.Value);
+                    }
+                    
+                    if (retryCount.HasValue)
+                    {
+                        pendingInfo.DeliveryCount = retryCount.Value;
+                    }
+                    else
+                    {
+                        pendingInfo.DeliveryCount++;
+                    }
+
+                    claimedEntries.Add(new StreamEntry(streamEntry.Id, streamEntry.Fields));
+                }
+                else if (force)
+                {
+                    // FORCE creates the pending entry if it doesn't exist
+                    var deliveryTime = timeMs.HasValue
+                        ? DateTimeOffset.FromUnixTimeMilliseconds(timeMs.Value)
+                        : now;
+                    
+                    if (idleMs.HasValue)
+                    {
+                        deliveryTime = now.AddMilliseconds(-idleMs.Value);
+                    }
+
+                    var count = retryCount ?? 1;
+                    state.Pending[id] = new PendingEntryInfo(consumer, deliveryTime, count);
+                    claimedEntries.Add(new StreamEntry(streamEntry.Id, streamEntry.Fields));
+                }
+            }
+
+            return Task.FromResult(new StreamClaimResult(
+                StreamClaimResultStatus.Ok, claimedEntries.ToArray()));
         }
 
         public Task<StreamEntry[]> StreamRangeAsync(

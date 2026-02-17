@@ -484,6 +484,32 @@ namespace Dredis.Abstractions.Storage
             CancellationToken token = default);
 
         /// <summary>
+        /// Claims pending entries for a consumer, transferring ownership from other consumers.
+        /// </summary>
+        /// <param name="key">The stream key.</param>
+        /// <param name="group">The consumer group name.</param>
+        /// <param name="consumer">The consumer claiming the entries.</param>
+        /// <param name="minIdleTimeMs">Minimum idle time in milliseconds for entries to be claimed.</param>
+        /// <param name="ids">Entry ids to claim.</param>
+        /// <param name="idleMs">Optional idle time to set for claimed entries.</param>
+        /// <param name="timeMs">Optional Unix time in milliseconds to set as delivery time.</param>
+        /// <param name="retryCount">Optional retry count to set.</param>
+        /// <param name="force">If true, creates pending entries even if they don't exist.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains status and claimed entries.</returns>
+        Task<StreamClaimResult> StreamClaimAsync(
+            string key,
+            string group,
+            string consumer,
+            long minIdleTimeMs,
+            string[] ids,
+            long? idleMs = null,
+            long? timeMs = null,
+            long? retryCount = null,
+            bool force = false,
+            CancellationToken token = default);
+
+        /// <summary>
         /// Asynchronously removes all expired keys from the cache.
         /// </summary>
         /// <remarks>The duration of the cleanup operation may vary depending on the number of keys in the

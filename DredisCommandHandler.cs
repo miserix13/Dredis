@@ -166,6 +166,10 @@ namespace Dredis
                     await HandleXPendingAsync(ctx, elements);
                     break;
 
+                case "XCLAIM":
+                    await HandleXClaimAsync(ctx, elements);
+                    break;
+
                 default:
                     WriteError(ctx, $"ERR unknown command '{cmd}'");
                     break;
@@ -1564,6 +1568,165 @@ namespace Dredis
             summary.Add(new ArrayRedisMessage(consumersList));
 
             await ctx.WriteAndFlushAsync(new ArrayRedisMessage(summary));
+        }
+
+        private async Task HandleXClaimAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            // XCLAIM key group consumer min-idle-time id [id ...] [IDLE ms] [TIME ms-unix-time] [RETRYCOUNT count] [FORCE] [JUSTID]
+            if (args.Count < 6)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'xclaim' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key) || 
+                !TryGetString(args[2], out var group) ||
+                !TryGetString(args[3], out var consumer) ||
+                !TryGetString(args[4], out var minIdleStr) ||
+                !long.TryParse(minIdleStr, out var minIdleTimeMs) || minIdleTimeMs < 0)
+            {
+                WriteError(ctx, "ERR invalid arguments");
+                return;
+            }
+
+            // Collect IDs and options
+            var idList = new List<string>();
+            long? idleMs = null;
+            long? timeMs = null;
+            long? retryCount = null;
+            bool force = false;
+            bool justId = false;
+
+            int i = 5;
+            while (i < args.Count)
+            {
+                if (!TryGetString(args[i], out var arg))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                var upperArg = arg.ToUpperInvariant();
+                if (upperArg == "IDLE")
+                {
+                    i++;
+                    if (i >= args.Count || !TryGetString(args[i], out var idleStr) ||
+                        !long.TryParse(idleStr, out var idleValue) || idleValue < 0)
+                    {
+                        WriteError(ctx, "ERR invalid IDLE option");
+                        return;
+                    }
+                    idleMs = idleValue;
+                    i++;
+                }
+                else if (upperArg == "TIME")
+                {
+                    i++;
+                    if (i >= args.Count || !TryGetString(args[i], out var timeStr) ||
+                        !long.TryParse(timeStr, out var timeValue) || timeValue < 0)
+                    {
+                        WriteError(ctx, "ERR invalid TIME option");
+                        return;
+                    }
+                    timeMs = timeValue;
+                    i++;
+                }
+                else if (upperArg == "RETRYCOUNT")
+                {
+                    i++;
+                    if (i >= args.Count || !TryGetString(args[i], out var retryStr) ||
+                        !long.TryParse(retryStr, out var retryValue) || retryValue < 0)
+                    {
+                        WriteError(ctx, "ERR invalid RETRYCOUNT option");
+                        return;
+                    }
+                    retryCount = retryValue;
+                    i++;
+                }
+                else if (upperArg == "FORCE")
+                {
+                    force = true;
+                    i++;
+                }
+                else if (upperArg == "JUSTID")
+                {
+                    justId = true;
+                    i++;
+                }
+                else
+                {
+                    // This should be an ID
+                    if (!TryParseStreamIdText(arg))
+                    {
+                        WriteError(ctx, "ERR invalid stream id");
+                        return;
+                    }
+                    idList.Add(arg);
+                    i++;
+                }
+            }
+
+            if (idList.Count == 0)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'xclaim' command");
+                return;
+            }
+
+            var result = await _store.StreamClaimAsync(
+                key, group, consumer, minIdleTimeMs, idList.ToArray(),
+                idleMs, timeMs, retryCount, force).ConfigureAwait(false);
+
+            switch (result.Status)
+            {
+                case StreamClaimResultStatus.WrongType:
+                    WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                    return;
+
+                case StreamClaimResultStatus.NoStream:
+                    WriteError(ctx, "ERR The XCLAIM command requires the key to exist");
+                    return;
+
+                case StreamClaimResultStatus.NoGroup:
+                    WriteError(ctx, "NOGROUP No such consumer group");
+                    return;
+            }
+
+            // Return results
+            if (justId)
+            {
+                // JUSTID: Return only entry IDs
+                var idArray = new List<IRedisMessage>();
+                foreach (var entry in result.Entries)
+                {
+                    idArray.Add(new SimpleStringRedisMessage(entry.Id));
+                }
+                await ctx.WriteAndFlushAsync(new ArrayRedisMessage(idArray));
+            }
+            else
+            {
+                // Return full entries
+                var array = new List<IRedisMessage>();
+                foreach (var entry in result.Entries)
+                {
+                    var entryArray = new List<IRedisMessage>
+                    {
+                        new SimpleStringRedisMessage(entry.Id)
+                    };
+
+                    var fieldsArray = new List<IRedisMessage>();
+                    foreach (var field in entry.Fields)
+                    {
+                        fieldsArray.Add(new SimpleStringRedisMessage(field.Key));
+                        fieldsArray.Add(new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(field.Value)));
+                    }
+                    entryArray.Add(new ArrayRedisMessage(fieldsArray));
+
+                    array.Add(new ArrayRedisMessage(entryArray));
+                }
+                await ctx.WriteAndFlushAsync(new ArrayRedisMessage(array));
+            }
         }
 
         private static bool TryParseStreamIdText(string text)
