@@ -527,6 +527,14 @@ namespace Dredis.Abstractions.Storage
         Task<long> StreamLengthAsync(string key, CancellationToken token = default);
 
         /// <summary>
+        /// Retrieves the last stream entry id for the specified key, or null if the stream is empty.
+        /// </summary>
+        /// <param name="key">The stream key.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result is the last entry id, or null.</returns>
+        Task<string?> StreamLastIdAsync(string key, CancellationToken token = default);
+
+        /// <summary>
         /// Reads entries with ids greater than the provided ids. Result order matches keys.
         /// </summary>
         /// <param name="keys">Stream keys to read.</param>

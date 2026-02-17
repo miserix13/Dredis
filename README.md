@@ -16,7 +16,7 @@ Currently implemented RESP commands and behavior:
 
 Notes:
 
-- `XREAD` supports `COUNT` and does not support `BLOCK`.
+- `XREAD` supports `COUNT` and `BLOCK`.
 - `XREADGROUP` supports `COUNT` and `BLOCK`.
 - `XPENDING` supports both summary and extended forms with filtering (IDLE, consumer, range).
 - `XCLAIM` supports all options: `IDLE`, `TIME`, `RETRYCOUNT`, `FORCE`, `JUSTID`.

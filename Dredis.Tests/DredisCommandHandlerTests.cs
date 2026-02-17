@@ -617,6 +617,44 @@ namespace Dredis.Tests
 
         [Fact]
         /// <summary>
+        /// Verifies XREAD BLOCK waits for entries.
+        /// </summary>
+        public async Task XRead_Block_WaitsForEntry()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("XREAD", "BLOCK", "50", "STREAMS", "stream", "$"));
+                channel.RunPendingTasks();
+
+                await Task.Delay(10);
+
+                channel.WriteInbound(Command("XADD", "stream", "*", "a", "1"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                await Task.Delay(60);
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var array = Assert.IsType<ArrayRedisMessage>(response);
+                Assert.Single(array.Children);
+
+                var streamMessage = Assert.IsType<ArrayRedisMessage>(array.Children[0]);
+                var entriesMessage = Assert.IsType<ArrayRedisMessage>(streamMessage.Children[1]);
+                var entries = GetStreamEntries(entriesMessage.Children);
+                Assert.Single(entries);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
         /// Verifies XDEL removes entries and returns count.
         /// </summary>
         public async Task XDel_RemovesEntries_ReturnsCount()
@@ -1720,6 +1758,30 @@ namespace Dredis.Tests
             }
 
             return Task.FromResult(_streams.TryGetValue(key, out var stream) ? stream.Count : 0L);
+        }
+
+        /// <summary>
+        /// Returns the last entry id for a stream, or null if empty.
+        /// </summary>
+        public Task<string?> StreamLastIdAsync(string key, CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+                return Task.FromResult<string?>(null);
+            }
+
+            if (!_streams.TryGetValue(key, out var stream) || stream.Count == 0)
+            {
+                return Task.FromResult<string?>(null);
+            }
+
+            if (_streamLastIds.TryGetValue(key, out var last))
+            {
+                return Task.FromResult<string?>(FormatStreamId(last));
+            }
+
+            return Task.FromResult<string?>(stream[stream.Count - 1].Id);
         }
 
         /// <summary>

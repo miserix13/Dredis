@@ -959,6 +959,7 @@ namespace Dredis
 
             int index = 1;
             int? count = null;
+            TimeSpan? block = null;
 
             while (index < args.Count)
             {
@@ -989,8 +990,16 @@ namespace Dredis
 
                 if (string.Equals(option, "BLOCK", StringComparison.OrdinalIgnoreCase))
                 {
-                    WriteError(ctx, "ERR BLOCK not supported");
-                    return;
+                    if (index + 1 >= args.Count || !TryGetString(args[index + 1], out var blockText) ||
+                        !long.TryParse(blockText, out var blockMs) || blockMs < 0)
+                    {
+                        WriteError(ctx, "ERR invalid block");
+                        return;
+                    }
+
+                    block = TimeSpan.FromMilliseconds(blockMs);
+                    index += 2;
+                    continue;
                 }
 
                 WriteError(ctx, "ERR syntax error");
@@ -1034,45 +1043,36 @@ namespace Dredis
                 ids[i] = id;
             }
 
-            var results = await _store.StreamReadAsync(keys, ids, count).ConfigureAwait(false);
-            var streamMessages = new List<IRedisMessage>();
-
-            foreach (var result in results)
+            if (block.HasValue)
             {
-                if (result.Entries.Length == 0)
+                for (int i = 0; i < ids.Length; i++)
                 {
-                    continue;
-                }
-
-                var entryMessages = new IRedisMessage[result.Entries.Length];
-                for (int i = 0; i < result.Entries.Length; i++)
-                {
-                    var entry = result.Entries[i];
-                    var fieldChildren = new IRedisMessage[entry.Fields.Length * 2];
-
-                    for (int j = 0; j < entry.Fields.Length; j++)
+                    if (ids[i] == "$")
                     {
-                        var fieldBytes = Utf8.GetBytes(entry.Fields[j].Key);
-                        fieldChildren[j * 2] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(fieldBytes));
-                        fieldChildren[j * 2 + 1] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(entry.Fields[j].Value));
+                        var lastId = await _store.StreamLastIdAsync(keys[i]).ConfigureAwait(false);
+                        ids[i] = lastId ?? "0-0";
                     }
+                }
+            }
 
-                    var entryChildren = new IRedisMessage[2]
-                    {
-                        new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(entry.Id))),
-                        new ArrayRedisMessage(fieldChildren)
-                    };
+            var results = await _store.StreamReadAsync(keys, ids, count).ConfigureAwait(false);
+            var streamMessages = BuildStreamMessages(results);
 
-                    entryMessages[i] = new ArrayRedisMessage(entryChildren);
+            if (streamMessages.Count == 0 && block.HasValue)
+            {
+                if (block.Value > TimeSpan.Zero)
+                {
+                    await Task.Delay(block.Value).ConfigureAwait(false);
                 }
 
-                var streamChildren = new IRedisMessage[2]
-                {
-                    new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(result.Key))),
-                    new ArrayRedisMessage(entryMessages)
-                };
+                results = await _store.StreamReadAsync(keys, ids, count).ConfigureAwait(false);
+                streamMessages = BuildStreamMessages(results);
 
-                streamMessages.Add(new ArrayRedisMessage(streamChildren));
+                if (streamMessages.Count == 0)
+                {
+                    WriteNullArray(ctx);
+                    return;
+                }
             }
 
             WriteArray(ctx, streamMessages);
@@ -1822,8 +1822,56 @@ namespace Dredis
                     array.Add(new ArrayRedisMessage(entryArray));
                 }
                 await ctx.WriteAndFlushAsync(new ArrayRedisMessage(array));
+            }}
+
+            /// <summary>
+            /// Builds RESP stream messages from stream read results.
+            /// </summary>
+            private static List<IRedisMessage> BuildStreamMessages(StreamReadResult[] results)
+            {
+                var streamMessages = new List<IRedisMessage>();
+
+                foreach (var result in results)
+                {
+                    if (result.Entries.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    var entryMessages = new IRedisMessage[result.Entries.Length];
+                    for (int i = 0; i < result.Entries.Length; i++)
+                    {
+                        var entry = result.Entries[i];
+                        var fieldChildren = new IRedisMessage[entry.Fields.Length * 2];
+
+                        for (int j = 0; j < entry.Fields.Length; j++)
+                        {
+                            var fieldBytes = Utf8.GetBytes(entry.Fields[j].Key);
+                            fieldChildren[j * 2] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(fieldBytes));
+                            fieldChildren[j * 2 + 1] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(entry.Fields[j].Value));
+                        }
+
+                        var entryChildren = new IRedisMessage[2]
+                        {
+                            new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(entry.Id))),
+                            new ArrayRedisMessage(fieldChildren)
+                        };
+
+                        entryMessages[i] = new ArrayRedisMessage(entryChildren);
+                    }
+
+                    var streamChildren = new IRedisMessage[2]
+                    {
+                        new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(result.Key))),
+                        new ArrayRedisMessage(entryMessages)
+                    };
+
+                    streamMessages.Add(new ArrayRedisMessage(streamChildren));
+                }
+
+                return streamMessages;
             }
-        }
+        
 
         /// <summary>
         /// Validates a stream id in the form "ms-seq".
