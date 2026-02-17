@@ -12,7 +12,7 @@ Currently implemented RESP commands and behavior:
 - Counters: `INCR`, `INCRBY`, `DECR`, `DECRBY`
 - Expiration: `EXPIRE`, `PEXPIRE`, `TTL`, `PTTL`
 - Hashes: `HSET`, `HGET`, `HDEL`, `HGETALL`
-- Lists: `LPUSH`, `RPUSH`, `LPOP`, `RPOP`, `LRANGE`
+- Lists: `LPUSH`, `RPUSH`, `LPOP`, `RPOP`, `LRANGE`, `LLEN`, `LINDEX`, `LSET`, `LTRIM`
 - Streams: `XADD`, `XDEL`, `XLEN`, `XTRIM`, `XRANGE`, `XREVRANGE`, `XREAD`, `XINFO`, `XSETID`, `XGROUP CREATE`, `XGROUP DESTROY`, `XGROUP SETID`, `XGROUP DELCONSUMER`, `XREADGROUP`, `XACK`, `XPENDING`, `XCLAIM`
 
 Notes:
@@ -34,7 +34,7 @@ Notes:
 | Counters | Yes | `INCR`, `INCRBY`, `DECR`, `DECRBY` |
 | Expiration | Yes | `EXPIRE`, `PEXPIRE`, `TTL`, `PTTL` |
 | Hashes | Yes | `HSET`, `HGET`, `HDEL`, `HGETALL` |
-| Lists | Yes | `LPUSH`, `RPUSH`, `LPOP`, `RPOP`, `LRANGE` |
+| Lists | Yes | `LPUSH`, `RPUSH`, `LPOP`, `RPOP`, `LRANGE`, `LLEN`, `LINDEX`, `LSET`, `LTRIM` |
 | Streams | Yes | `XADD`, `XDEL`, `XLEN`, `XTRIM`, `XRANGE`, `XREVRANGE`, `XREAD`, `XINFO`, `XSETID` |
 | Consumer groups | Yes | `XGROUP CREATE/DESTROY/SETID/DELCONSUMER`, `XREADGROUP`, `XACK`, `XPENDING`, `XCLAIM` |
 | Sets | No | Planned |

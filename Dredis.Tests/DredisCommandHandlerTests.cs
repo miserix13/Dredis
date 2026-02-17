@@ -676,6 +676,143 @@ namespace Dredis.Tests
 
         [Fact]
         /// <summary>
+        /// Verifies LLEN returns list length or zero for missing lists.
+        /// </summary>
+        public async Task ListLength_ReturnsLength()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("LLEN", "list"));
+                channel.RunPendingTasks();
+                var emptyLength = Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel));
+                Assert.Equal(0, emptyLength.Value);
+
+                channel.WriteInbound(Command("RPUSH", "list", "a", "b", "c"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("LLEN", "list"));
+                channel.RunPendingTasks();
+                var length = Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel));
+                Assert.Equal(3, length.Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
+        /// Verifies LINDEX returns values and null for out of range.
+        /// </summary>
+        public async Task ListIndex_ReturnsValue()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("RPUSH", "list", "a", "b", "c"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("LINDEX", "list", "1"));
+                channel.RunPendingTasks();
+                var value = Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel));
+                Assert.Equal("b", GetBulkString(value));
+
+                channel.WriteInbound(Command("LINDEX", "list", "-1"));
+                channel.RunPendingTasks();
+                var last = Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel));
+                Assert.Equal("c", GetBulkString(last));
+
+                channel.WriteInbound(Command("LINDEX", "list", "10"));
+                channel.RunPendingTasks();
+                var missing = ReadOutbound(channel);
+                Assert.True(ReferenceEquals(missing, FullBulkStringRedisMessage.Null));
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
+        /// Verifies LSET updates a list index and errors on out of range.
+        /// </summary>
+        public async Task ListSet_UpdatesIndex()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("RPUSH", "list", "a", "b", "c"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("LSET", "list", "1", "z"));
+                channel.RunPendingTasks();
+                var ok = Assert.IsType<SimpleStringRedisMessage>(ReadOutbound(channel));
+                Assert.Equal("OK", ok.Content);
+
+                channel.WriteInbound(Command("LINDEX", "list", "1"));
+                channel.RunPendingTasks();
+                var value = Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel));
+                Assert.Equal("z", GetBulkString(value));
+
+                channel.WriteInbound(Command("LSET", "list", "10", "x"));
+                channel.RunPendingTasks();
+                var error = Assert.IsType<ErrorRedisMessage>(ReadOutbound(channel));
+                Assert.Equal("ERR index out of range", error.Content);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
+        /// Verifies LTRIM keeps the requested range.
+        /// </summary>
+        public async Task ListTrim_TrimsList()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("RPUSH", "list", "a", "b", "c", "d"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("LTRIM", "list", "1", "2"));
+                channel.RunPendingTasks();
+                var ok = Assert.IsType<SimpleStringRedisMessage>(ReadOutbound(channel));
+                Assert.Equal("OK", ok.Content);
+
+                channel.WriteInbound(Command("LRANGE", "list", "0", "-1"));
+                channel.RunPendingTasks();
+                var response = ReadOutbound(channel);
+                var array = Assert.IsType<ArrayRedisMessage>(response);
+                Assert.Equal(2, array.Children.Count);
+                Assert.Equal("b", GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(array.Children[0])));
+                Assert.Equal("c", GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(array.Children[1])));
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
         /// Verifies XADD and XLEN return expected stream length.
         /// </summary>
         public async Task XAdd_XLen_ReturnsCount()
@@ -3479,6 +3616,150 @@ namespace Dredis.Tests
             }
 
             return Task.FromResult(new ListRangeResult(ListResultStatus.Ok, values));
+        }
+
+        /// <summary>
+        /// Returns the length of a list.
+        /// </summary>
+        public Task<ListLengthResult> ListLengthAsync(string key, CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            {
+                return Task.FromResult(new ListLengthResult(ListResultStatus.WrongType, 0));
+            }
+
+            return Task.FromResult(_lists.TryGetValue(key, out var list)
+                ? new ListLengthResult(ListResultStatus.Ok, list.Count)
+                : new ListLengthResult(ListResultStatus.Ok, 0));
+        }
+
+        /// <summary>
+        /// Returns the value at a list index.
+        /// </summary>
+        public Task<ListIndexResult> ListIndexAsync(string key, int index, CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            {
+                return Task.FromResult(new ListIndexResult(ListResultStatus.WrongType, null));
+            }
+
+            if (!_lists.TryGetValue(key, out var list) || list.Count == 0)
+            {
+                return Task.FromResult(new ListIndexResult(ListResultStatus.Ok, null));
+            }
+
+            var resolved = index < 0 ? list.Count + index : index;
+            if (resolved < 0 || resolved >= list.Count)
+            {
+                return Task.FromResult(new ListIndexResult(ListResultStatus.Ok, null));
+            }
+
+            return Task.FromResult(new ListIndexResult(ListResultStatus.Ok, list[resolved]));
+        }
+
+        /// <summary>
+        /// Sets the value at a list index.
+        /// </summary>
+        public Task<ListSetResult> ListSetAsync(
+            string key,
+            int index,
+            byte[] value,
+            CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            {
+                return Task.FromResult(new ListSetResult(ListSetResultStatus.WrongType));
+            }
+
+            if (!_lists.TryGetValue(key, out var list) || list.Count == 0)
+            {
+                return Task.FromResult(new ListSetResult(ListSetResultStatus.OutOfRange));
+            }
+
+            var resolved = index < 0 ? list.Count + index : index;
+            if (resolved < 0 || resolved >= list.Count)
+            {
+                return Task.FromResult(new ListSetResult(ListSetResultStatus.OutOfRange));
+            }
+
+            list[resolved] = value;
+            return Task.FromResult(new ListSetResult(ListSetResultStatus.Ok));
+        }
+
+        /// <summary>
+        /// Trims a list to the specified range.
+        /// </summary>
+        public Task<ListResultStatus> ListTrimAsync(
+            string key,
+            int start,
+            int stop,
+            CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            {
+                return Task.FromResult(ListResultStatus.WrongType);
+            }
+
+            if (!_lists.TryGetValue(key, out var list) || list.Count == 0)
+            {
+                return Task.FromResult(ListResultStatus.Ok);
+            }
+
+            var length = list.Count;
+            var startIndex = start < 0 ? length + start : start;
+            var stopIndex = stop < 0 ? length + stop : stop;
+
+            if (startIndex < 0)
+            {
+                startIndex = 0;
+            }
+
+            if (stopIndex < 0)
+            {
+                stopIndex = 0;
+            }
+
+            if (startIndex >= length || stopIndex < startIndex)
+            {
+                _lists.Remove(key);
+                _expirations.Remove(key);
+                return Task.FromResult(ListResultStatus.Ok);
+            }
+
+            if (stopIndex >= length)
+            {
+                stopIndex = length - 1;
+            }
+
+            var count = stopIndex - startIndex + 1;
+            var trimmed = new List<byte[]>(count);
+            for (int i = 0; i < count; i++)
+            {
+                trimmed.Add(list[startIndex + i]);
+            }
+
+            _lists[key] = trimmed;
+            return Task.FromResult(ListResultStatus.Ok);
         }
 
         /// <summary>

@@ -159,6 +159,22 @@ namespace Dredis
                     await HandleListRangeAsync(ctx, elements);
                     break;
 
+                case "LLEN":
+                    await HandleListLengthAsync(ctx, elements);
+                    break;
+
+                case "LINDEX":
+                    await HandleListIndexAsync(ctx, elements);
+                    break;
+
+                case "LSET":
+                    await HandleListSetAsync(ctx, elements);
+                    break;
+
+                case "LTRIM":
+                    await HandleListTrimAsync(ctx, elements);
+                    break;
+
                 case "XADD":
                     await HandleXAddAsync(ctx, elements);
                     break;
@@ -567,6 +583,155 @@ namespace Dredis
             }
 
             WriteArray(ctx, children);
+        }
+
+        /// <summary>
+        /// Handles the LLEN command.
+        /// </summary>
+        private async Task HandleListLengthAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 2)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'llen' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var result = await _store.ListLengthAsync(key).ConfigureAwait(false);
+            if (result.Status == ListResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            WriteInteger(ctx, result.Length);
+        }
+
+        /// <summary>
+        /// Handles the LINDEX command.
+        /// </summary>
+        private async Task HandleListIndexAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'lindex' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key) ||
+                !TryGetString(args[2], out var indexText))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            if (!int.TryParse(indexText, out var index))
+            {
+                WriteError(ctx, "ERR value is not an integer or out of range");
+                return;
+            }
+
+            var result = await _store.ListIndexAsync(key, index).ConfigureAwait(false);
+            if (result.Status == ListResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            if (result.Value == null)
+            {
+                WriteNullBulkString(ctx);
+                return;
+            }
+
+            WriteBulkString(ctx, result.Value);
+        }
+
+        /// <summary>
+        /// Handles the LSET command.
+        /// </summary>
+        private async Task HandleListSetAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 4)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'lset' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key) ||
+                !TryGetString(args[2], out var indexText) ||
+                !TryGetBytes(args[3], out var value))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            if (!int.TryParse(indexText, out var index))
+            {
+                WriteError(ctx, "ERR value is not an integer or out of range");
+                return;
+            }
+
+            var result = await _store.ListSetAsync(key, index, value).ConfigureAwait(false);
+            switch (result.Status)
+            {
+                case ListSetResultStatus.WrongType:
+                    WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                    return;
+                case ListSetResultStatus.OutOfRange:
+                    WriteError(ctx, "ERR index out of range");
+                    return;
+            }
+
+            WriteSimpleString(ctx, "OK");
+        }
+
+        /// <summary>
+        /// Handles the LTRIM command.
+        /// </summary>
+        private async Task HandleListTrimAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 4)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'ltrim' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key) ||
+                !TryGetString(args[2], out var startText) ||
+                !TryGetString(args[3], out var stopText))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            if (!int.TryParse(startText, out var start) || !int.TryParse(stopText, out var stop))
+            {
+                WriteError(ctx, "ERR value is not an integer or out of range");
+                return;
+            }
+
+            var status = await _store.ListTrimAsync(key, start, stop).ConfigureAwait(false);
+            if (status == ListResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            WriteSimpleString(ctx, "OK");
         }
 
         /// <summary>

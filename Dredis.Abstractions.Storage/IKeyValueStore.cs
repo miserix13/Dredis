@@ -168,6 +168,83 @@ namespace Dredis.Abstractions.Storage
     }
 
     /// <summary>
+    /// Represents a list length result.
+    /// </summary>
+    public sealed class ListLengthResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ListLengthResult"/> class.
+        /// </summary>
+        public ListLengthResult(ListResultStatus status, long length)
+        {
+            Status = status;
+            Length = length;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public ListResultStatus Status { get; }
+        /// <summary>
+        /// Gets the list length.
+        /// </summary>
+        public long Length { get; }
+    }
+
+    /// <summary>
+    /// Represents a list index lookup result.
+    /// </summary>
+    public sealed class ListIndexResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ListIndexResult"/> class.
+        /// </summary>
+        public ListIndexResult(ListResultStatus status, byte[]? value)
+        {
+            Status = status;
+            Value = value;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public ListResultStatus Status { get; }
+        /// <summary>
+        /// Gets the indexed value, or null if out of range.
+        /// </summary>
+        public byte[]? Value { get; }
+    }
+
+    /// <summary>
+    /// Describes results of setting a list index.
+    /// </summary>
+    public enum ListSetResultStatus
+    {
+        Ok,
+        WrongType,
+        OutOfRange
+    }
+
+    /// <summary>
+    /// Represents a list set result.
+    /// </summary>
+    public sealed class ListSetResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ListSetResult"/> class.
+        /// </summary>
+        public ListSetResult(ListSetResultStatus status)
+        {
+            Status = status;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public ListSetResultStatus Status { get; }
+    }
+
+    /// <summary>
     /// Describes results of setting a stream's last id.
     /// </summary>
     public enum StreamSetIdResultStatus
@@ -848,6 +925,56 @@ namespace Dredis.Abstractions.Storage
         /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
         /// <returns>A task that represents the asynchronous operation. The task result contains range values.</returns>
         Task<ListRangeResult> ListRangeAsync(
+            string key,
+            int start,
+            int stop,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Returns the length of a list.
+        /// </summary>
+        /// <param name="key">The list key.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains list length.</returns>
+        Task<ListLengthResult> ListLengthAsync(
+            string key,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Returns the value at a list index.
+        /// </summary>
+        /// <param name="key">The list key.</param>
+        /// <param name="index">The index to read.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the value.</returns>
+        Task<ListIndexResult> ListIndexAsync(
+            string key,
+            int index,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Sets the value at a list index.
+        /// </summary>
+        /// <param name="key">The list key.</param>
+        /// <param name="index">The index to update.</param>
+        /// <param name="value">The value to set.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains status.</returns>
+        Task<ListSetResult> ListSetAsync(
+            string key,
+            int index,
+            byte[] value,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Trims a list to the specified range.
+        /// </summary>
+        /// <param name="key">The list key.</param>
+        /// <param name="start">The starting index.</param>
+        /// <param name="stop">The ending index (inclusive).</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains status.</returns>
+        Task<ListResultStatus> ListTrimAsync(
             string key,
             int start,
             int stop,
