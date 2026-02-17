@@ -1150,6 +1150,117 @@ namespace Dredis.Tests
 
         [Fact]
         /// <summary>
+        /// Verifies XSETID initializes an empty stream and updates last-generated-id.
+        /// </summary>
+        public async Task XSetId_SetsLastId()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("XSETID", "stream", "42-0"));
+                channel.RunPendingTasks();
+
+                var ok = Assert.IsType<SimpleStringRedisMessage>(ReadOutbound(channel));
+                Assert.Equal("OK", ok.Content);
+
+                channel.WriteInbound(Command("XINFO", "STREAM", "stream"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var array = Assert.IsType<ArrayRedisMessage>(response);
+                var items = GetHashPairs(array.Children);
+                Assert.Equal("0", items["length"]);
+                Assert.Equal("42-0", items["last-generated-id"]);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
+        /// Verifies XGROUP SETID updates the group's last-delivered-id.
+        /// </summary>
+        public async Task XGroupSetId_UpdatesLastDelivered()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("XADD", "stream", "*", "a", "1"));
+                channel.RunPendingTasks();
+                var id1 = GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel)));
+
+                channel.WriteInbound(Command("XGROUP", "CREATE", "stream", "group", "-"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("XGROUP", "SETID", "stream", "group", id1));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("XINFO", "GROUPS", "stream"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var array = Assert.IsType<ArrayRedisMessage>(response);
+                var groupArray = Assert.IsType<ArrayRedisMessage>(array.Children[0]);
+                var groupItems = GetHashPairs(groupArray.Children);
+                Assert.Equal(id1, groupItems["last-delivered-id"]);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
+        /// Verifies XGROUP DELCONSUMER removes pending entries for a consumer.
+        /// </summary>
+        public async Task XGroupDelConsumer_RemovesPending()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("XGROUP", "CREATE", "stream", "group", "-", "MKSTREAM"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("XADD", "stream", "*", "a", "1"));
+                channel.RunPendingTasks();
+                var id = GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel)));
+
+                channel.WriteInbound(Command("XREADGROUP", "GROUP", "group", "consumer", "STREAMS", "stream", ">"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("XGROUP", "DELCONSUMER", "stream", "group", "consumer"));
+                channel.RunPendingTasks();
+                var removed = Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel));
+                Assert.Equal(1, removed.Value);
+
+                channel.WriteInbound(Command("XPENDING", "stream", "group"));
+                channel.RunPendingTasks();
+                var pendingResponse = ReadOutbound(channel);
+                var pendingArray = Assert.IsType<ArrayRedisMessage>(pendingResponse);
+                var totalCount = Assert.IsType<IntegerRedisMessage>(pendingArray.Children[0]);
+                Assert.Equal(0, totalCount.Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
         /// Verifies XREADGROUP returns entries and XACK removes pending.
         /// </summary>
         public async Task XReadGroup_ReturnsEntriesAndAckRemovesPending()
@@ -2355,6 +2466,39 @@ namespace Dredis.Tests
         }
 
         /// <summary>
+        /// Sets the stream last generated id.
+        /// </summary>
+        public Task<StreamSetIdResultStatus> StreamSetIdAsync(
+            string key,
+            string lastId,
+            CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key))
+            {
+                return Task.FromResult(StreamSetIdResultStatus.WrongType);
+            }
+
+            if (!TryParseStreamId(lastId, out var parsed))
+            {
+                return Task.FromResult(StreamSetIdResultStatus.InvalidId);
+            }
+
+            if (!_streams.ContainsKey(key))
+            {
+                _streams[key] = new List<StreamEntryModel>();
+                _streamGroups.Remove(key);
+            }
+
+            _streamLastIds[key] = parsed;
+            return Task.FromResult(StreamSetIdResultStatus.Ok);
+        }
+
+        /// <summary>
         /// Creates a consumer group for a stream.
         /// </summary>
         public Task<StreamGroupCreateResult> StreamGroupCreateAsync(
@@ -2442,6 +2586,92 @@ namespace Dredis.Tests
             }
 
             return Task.FromResult(StreamGroupDestroyResult.Removed);
+        }
+
+        /// <summary>
+        /// Sets the last delivered id for a consumer group.
+        /// </summary>
+        public Task<StreamGroupSetIdResultStatus> StreamGroupSetIdAsync(
+            string key,
+            string group,
+            string lastId,
+            CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+                return Task.FromResult(StreamGroupSetIdResultStatus.NoStream);
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key))
+            {
+                return Task.FromResult(StreamGroupSetIdResultStatus.WrongType);
+            }
+
+            if (!_streams.TryGetValue(key, out var stream))
+            {
+                return Task.FromResult(StreamGroupSetIdResultStatus.NoStream);
+            }
+
+            if (!_streamGroups.TryGetValue(key, out var groups) || !groups.TryGetValue(group, out var state))
+            {
+                return Task.FromResult(StreamGroupSetIdResultStatus.NoGroup);
+            }
+
+            if (!TryResolveGroupStartId(key, stream, lastId, out var resolvedId))
+            {
+                return Task.FromResult(StreamGroupSetIdResultStatus.InvalidId);
+            }
+
+            state.LastDeliveredId = resolvedId;
+            return Task.FromResult(StreamGroupSetIdResultStatus.Ok);
+        }
+
+        /// <summary>
+        /// Removes a consumer from a group and clears pending entries.
+        /// </summary>
+        public Task<StreamGroupDelConsumerResult> StreamGroupDelConsumerAsync(
+            string key,
+            string group,
+            string consumer,
+            CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+                return Task.FromResult(new StreamGroupDelConsumerResult(StreamGroupDelConsumerResultStatus.NoStream, 0));
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key))
+            {
+                return Task.FromResult(new StreamGroupDelConsumerResult(StreamGroupDelConsumerResultStatus.WrongType, 0));
+            }
+
+            if (!_streams.ContainsKey(key))
+            {
+                return Task.FromResult(new StreamGroupDelConsumerResult(StreamGroupDelConsumerResultStatus.NoStream, 0));
+            }
+
+            if (!_streamGroups.TryGetValue(key, out var groups) || !groups.TryGetValue(group, out var state))
+            {
+                return Task.FromResult(new StreamGroupDelConsumerResult(StreamGroupDelConsumerResultStatus.NoGroup, 0));
+            }
+
+            var removed = 0L;
+            var toRemove = state.Pending
+                .Where(p => string.Equals(p.Value.Consumer, consumer, StringComparison.Ordinal))
+                .Select(p => p.Key)
+                .ToArray();
+
+            foreach (var id in toRemove)
+            {
+                if (state.Pending.Remove(id))
+                {
+                    removed++;
+                }
+            }
+
+            return Task.FromResult(new StreamGroupDelConsumerResult(StreamGroupDelConsumerResultStatus.Ok, removed));
         }
 
         /// <summary>

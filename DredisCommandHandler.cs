@@ -167,6 +167,10 @@ namespace Dredis
                     await HandleXRevRangeAsync(ctx, elements);
                     break;
 
+                case "XSETID":
+                    await HandleXSetIdAsync(ctx, elements);
+                    break;
+
                 case "XGROUP":
                     await HandleXGroupAsync(ctx, elements);
                     break;
@@ -1323,6 +1327,14 @@ namespace Dredis
                     await HandleXGroupDestroyAsync(ctx, args);
                     break;
 
+                case "SETID":
+                    await HandleXGroupSetIdAsync(ctx, args);
+                    break;
+
+                case "DELCONSUMER":
+                    await HandleXGroupDelConsumerAsync(ctx, args);
+                    break;
+
                 default:
                     WriteError(ctx, "ERR unknown subcommand or wrong number of arguments for 'xgroup' command");
                     break;
@@ -1421,6 +1433,130 @@ namespace Dredis
             }
 
             WriteInteger(ctx, result == StreamGroupDestroyResult.Removed ? 1 : 0);
+        }
+
+        /// <summary>
+        /// Handles the XGROUP SETID subcommand.
+        /// </summary>
+        private async Task HandleXGroupSetIdAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 5)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'xgroup setid' command");
+                return;
+            }
+
+            if (!TryGetString(args[2], out var key) ||
+                !TryGetString(args[3], out var group) ||
+                !TryGetString(args[4], out var id))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            if (!IsGroupCreateId(id))
+            {
+                WriteError(ctx, "ERR invalid stream id");
+                return;
+            }
+
+            var result = await _store.StreamGroupSetIdAsync(key, group, id).ConfigureAwait(false);
+            switch (result)
+            {
+                case StreamGroupSetIdResultStatus.WrongType:
+                    WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                    return;
+                case StreamGroupSetIdResultStatus.NoStream:
+                    WriteError(ctx, "ERR The XGROUP subcommand requires the key to exist");
+                    return;
+                case StreamGroupSetIdResultStatus.NoGroup:
+                    WriteError(ctx, "NOGROUP No such consumer group");
+                    return;
+                case StreamGroupSetIdResultStatus.InvalidId:
+                    WriteError(ctx, "ERR invalid stream id");
+                    return;
+            }
+
+            WriteSimpleString(ctx, "OK");
+        }
+
+        /// <summary>
+        /// Handles the XGROUP DELCONSUMER subcommand.
+        /// </summary>
+        private async Task HandleXGroupDelConsumerAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 5)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'xgroup delconsumer' command");
+                return;
+            }
+
+            if (!TryGetString(args[2], out var key) ||
+                !TryGetString(args[3], out var group) ||
+                !TryGetString(args[4], out var consumer))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var result = await _store.StreamGroupDelConsumerAsync(key, group, consumer).ConfigureAwait(false);
+            switch (result.Status)
+            {
+                case StreamGroupDelConsumerResultStatus.WrongType:
+                    WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                    return;
+                case StreamGroupDelConsumerResultStatus.NoStream:
+                    WriteError(ctx, "ERR The XGROUP subcommand requires the key to exist");
+                    return;
+                case StreamGroupDelConsumerResultStatus.NoGroup:
+                    WriteError(ctx, "NOGROUP No such consumer group");
+                    return;
+            }
+
+            WriteInteger(ctx, result.Removed);
+        }
+
+        /// <summary>
+        /// Handles the XSETID command.
+        /// </summary>
+        private async Task HandleXSetIdAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'xsetid' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key) || !TryGetString(args[2], out var id))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            if (!TryParseStreamIdText(id))
+            {
+                WriteError(ctx, "ERR invalid stream id");
+                return;
+            }
+
+            var result = await _store.StreamSetIdAsync(key, id).ConfigureAwait(false);
+            switch (result)
+            {
+                case StreamSetIdResultStatus.WrongType:
+                    WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                    return;
+                case StreamSetIdResultStatus.InvalidId:
+                    WriteError(ctx, "ERR invalid stream id");
+                    return;
+            }
+
+            WriteSimpleString(ctx, "OK");
         }
 
         /// <summary>

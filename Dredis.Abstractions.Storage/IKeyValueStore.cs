@@ -87,6 +87,63 @@ namespace Dredis.Abstractions.Storage
     }
 
     /// <summary>
+    /// Describes results of setting a stream's last id.
+    /// </summary>
+    public enum StreamSetIdResultStatus
+    {
+        Ok,
+        WrongType,
+        InvalidId
+    }
+
+    /// <summary>
+    /// Describes results of setting a consumer group last id.
+    /// </summary>
+    public enum StreamGroupSetIdResultStatus
+    {
+        Ok,
+        NoGroup,
+        NoStream,
+        WrongType,
+        InvalidId
+    }
+
+    /// <summary>
+    /// Describes results of removing a consumer from a group.
+    /// </summary>
+    public enum StreamGroupDelConsumerResultStatus
+    {
+        Ok,
+        NoGroup,
+        NoStream,
+        WrongType
+    }
+
+    /// <summary>
+    /// Represents a consumer group delconsumer result.
+    /// </summary>
+    public sealed class StreamGroupDelConsumerResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="StreamGroupDelConsumerResult"/> class.
+        /// </summary>
+        public StreamGroupDelConsumerResult(StreamGroupDelConsumerResultStatus status, long removed)
+        {
+            Status = status;
+            Removed = removed;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public StreamGroupDelConsumerResultStatus Status { get; }
+        /// <summary>
+        /// Gets the number of pending entries removed.
+        /// </summary>
+        public long Removed { get; }
+    }
+
+    /// <summary>
     /// Describes results of reading from a consumer group.
     /// </summary>
     public enum StreamGroupReadResultStatus
@@ -805,6 +862,18 @@ namespace Dredis.Abstractions.Storage
             CancellationToken token = default);
 
         /// <summary>
+        /// Sets the stream last generated id.
+        /// </summary>
+        /// <param name="key">The stream key.</param>
+        /// <param name="lastId">The last generated id.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the status.</returns>
+        Task<StreamSetIdResultStatus> StreamSetIdAsync(
+            string key,
+            string lastId,
+            CancellationToken token = default);
+
+        /// <summary>
         /// Creates a consumer group for a stream.
         /// </summary>
         /// <param name="key">The stream key.</param>
@@ -830,6 +899,34 @@ namespace Dredis.Abstractions.Storage
         Task<StreamGroupDestroyResult> StreamGroupDestroyAsync(
             string key,
             string group,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Sets the last delivered id for a consumer group.
+        /// </summary>
+        /// <param name="key">The stream key.</param>
+        /// <param name="group">The consumer group name.</param>
+        /// <param name="lastId">The last delivered id.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the status.</returns>
+        Task<StreamGroupSetIdResultStatus> StreamGroupSetIdAsync(
+            string key,
+            string group,
+            string lastId,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Removes a consumer from a group.
+        /// </summary>
+        /// <param name="key">The stream key.</param>
+        /// <param name="group">The consumer group name.</param>
+        /// <param name="consumer">The consumer name.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains removal details.</returns>
+        Task<StreamGroupDelConsumerResult> StreamGroupDelConsumerAsync(
+            string key,
+            string group,
+            string consumer,
             CancellationToken token = default);
 
         /// <summary>
