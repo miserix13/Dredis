@@ -547,6 +547,135 @@ namespace Dredis.Tests
 
         [Fact]
         /// <summary>
+        /// Verifies LPUSH/RPUSH update list length and order.
+        /// </summary>
+        public async Task ListPush_ReturnsLengthAndOrder()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("LPUSH", "list", "a", "b"));
+                channel.RunPendingTasks();
+                var len = Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel));
+                Assert.Equal(2, len.Value);
+
+                channel.WriteInbound(Command("RPUSH", "list", "c"));
+                channel.RunPendingTasks();
+                var len2 = Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel));
+                Assert.Equal(3, len2.Value);
+
+                channel.WriteInbound(Command("LRANGE", "list", "0", "-1"));
+                channel.RunPendingTasks();
+                var response = ReadOutbound(channel);
+                var array = Assert.IsType<ArrayRedisMessage>(response);
+                Assert.Equal(3, array.Children.Count);
+                Assert.Equal("b", GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(array.Children[0])));
+                Assert.Equal("a", GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(array.Children[1])));
+                Assert.Equal("c", GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(array.Children[2])));
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
+        /// Verifies LPOP/RPOP return values and handle empty lists.
+        /// </summary>
+        public async Task ListPop_ReturnsValues()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("RPUSH", "list", "a", "b"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("LPOP", "list"));
+                channel.RunPendingTasks();
+                var left = Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel));
+                Assert.Equal("a", GetBulkString(left));
+
+                channel.WriteInbound(Command("RPOP", "list"));
+                channel.RunPendingTasks();
+                var right = Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel));
+                Assert.Equal("b", GetBulkString(right));
+
+                channel.WriteInbound(Command("LPOP", "list"));
+                channel.RunPendingTasks();
+                var empty = ReadOutbound(channel);
+                Assert.True(ReferenceEquals(empty, FullBulkStringRedisMessage.Null));
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
+        /// Verifies LRANGE honors negative indices.
+        /// </summary>
+        public async Task ListRange_NegativeIndices()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("RPUSH", "list", "a", "b", "c", "d"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("LRANGE", "list", "-3", "-2"));
+                channel.RunPendingTasks();
+                var response = ReadOutbound(channel);
+                var array = Assert.IsType<ArrayRedisMessage>(response);
+                Assert.Equal(2, array.Children.Count);
+                Assert.Equal("b", GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(array.Children[0])));
+                Assert.Equal("c", GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(array.Children[1])));
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
+        /// Verifies list commands return WRONGTYPE for non-list keys.
+        /// </summary>
+        public async Task List_WrongType_ReturnsError()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("SET", "list", "value"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("LPUSH", "list", "a"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var error = Assert.IsType<ErrorRedisMessage>(response);
+                Assert.Equal("WRONGTYPE Operation against a key holding the wrong kind of value", error.Content);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
         /// Verifies XADD and XLEN return expected stream length.
         /// </summary>
         public async Task XAdd_XLen_ReturnsCount()
@@ -1725,6 +1854,7 @@ namespace Dredis.Tests
     {
         private readonly Dictionary<string, byte[]> _data = new(StringComparer.Ordinal);
         private readonly Dictionary<string, Dictionary<string, byte[]>> _hashes = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, List<byte[]>> _lists = new(StringComparer.Ordinal);
         private readonly Dictionary<string, List<StreamEntryModel>> _streams = new(StringComparer.Ordinal);
         private readonly Dictionary<string, StreamId> _streamLastIds = new(StringComparer.Ordinal);
         private readonly Dictionary<string, Dictionary<string, StreamGroupState>> _streamGroups = new(StringComparer.Ordinal);
@@ -1823,6 +1953,7 @@ namespace Dredis.Tests
         {
             _data[key] = Utf8.GetBytes(value);
             _hashes.Remove(key);
+            _lists.Remove(key);
             _streams.Remove(key);
             _streamLastIds.Remove(key);
             _streamGroups.Remove(key);
@@ -1861,6 +1992,7 @@ namespace Dredis.Tests
 
             _data[key] = value;
             _hashes.Remove(key);
+            _lists.Remove(key);
             _streams.Remove(key);
             _streamLastIds.Remove(key);
             _streamGroups.Remove(key);
@@ -1900,6 +2032,7 @@ namespace Dredis.Tests
             {
                 _data[item.Key] = item.Value;
                 _hashes.Remove(item.Key);
+                _lists.Remove(item.Key);
                 _streams.Remove(item.Key);
                 _streamLastIds.Remove(item.Key);
                 _streamGroups.Remove(item.Key);
@@ -2105,6 +2238,7 @@ namespace Dredis.Tests
                 _streams[key] = stream;
                 _data.Remove(key);
                 _hashes.Remove(key);
+                _lists.Remove(key);
             }
 
             var lastId = _streamLastIds.TryGetValue(key, out var last) ? last : new StreamId(-1, -1);
@@ -3104,6 +3238,7 @@ namespace Dredis.Tests
                 hash = new Dictionary<string, byte[]>(StringComparer.Ordinal);
                 _hashes[key] = hash;
                 _data.Remove(key);
+                _lists.Remove(key);
                 _streams.Remove(key);
                 _streamLastIds.Remove(key);
                 _streamGroups.Remove(key);
@@ -3194,6 +3329,159 @@ namespace Dredis.Tests
         }
 
         /// <summary>
+        /// Pushes values onto a list and returns the new length.
+        /// </summary>
+        public Task<ListPushResult> ListPushAsync(
+            string key,
+            byte[][] values,
+            bool left,
+            CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            {
+                return Task.FromResult(new ListPushResult(ListResultStatus.WrongType, 0));
+            }
+
+            if (!_lists.TryGetValue(key, out var list))
+            {
+                list = new List<byte[]>();
+                _lists[key] = list;
+                _data.Remove(key);
+                _hashes.Remove(key);
+                _streams.Remove(key);
+                _streamLastIds.Remove(key);
+                _streamGroups.Remove(key);
+            }
+
+            if (left)
+            {
+                for (int i = 0; i < values.Length; i++)
+                {
+                    list.Insert(0, values[i]);
+                }
+            }
+            else
+            {
+                list.AddRange(values);
+            }
+
+            return Task.FromResult(new ListPushResult(ListResultStatus.Ok, list.Count));
+        }
+
+        /// <summary>
+        /// Pops a value from a list.
+        /// </summary>
+        public Task<ListPopResult> ListPopAsync(
+            string key,
+            bool left,
+            CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            {
+                return Task.FromResult(new ListPopResult(ListResultStatus.WrongType, null));
+            }
+
+            if (!_lists.TryGetValue(key, out var list) || list.Count == 0)
+            {
+                return Task.FromResult(new ListPopResult(ListResultStatus.Ok, null));
+            }
+
+            byte[] value;
+            if (left)
+            {
+                value = list[0];
+                list.RemoveAt(0);
+            }
+            else
+            {
+                var index = list.Count - 1;
+                value = list[index];
+                list.RemoveAt(index);
+            }
+
+            if (list.Count == 0)
+            {
+                _lists.Remove(key);
+                _expirations.Remove(key);
+            }
+
+            return Task.FromResult(new ListPopResult(ListResultStatus.Ok, value));
+        }
+
+        /// <summary>
+        /// Returns a range of values from a list.
+        /// </summary>
+        public Task<ListRangeResult> ListRangeAsync(
+            string key,
+            int start,
+            int stop,
+            CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            {
+                return Task.FromResult(new ListRangeResult(ListResultStatus.WrongType, Array.Empty<byte[]>()));
+            }
+
+            if (!_lists.TryGetValue(key, out var list) || list.Count == 0)
+            {
+                return Task.FromResult(new ListRangeResult(ListResultStatus.Ok, Array.Empty<byte[]>()));
+            }
+
+            var length = list.Count;
+            var startIndex = start < 0 ? length + start : start;
+            var stopIndex = stop < 0 ? length + stop : stop;
+
+            if (startIndex < 0)
+            {
+                startIndex = 0;
+            }
+
+            if (stopIndex < 0)
+            {
+                stopIndex = 0;
+            }
+
+            if (startIndex >= length)
+            {
+                return Task.FromResult(new ListRangeResult(ListResultStatus.Ok, Array.Empty<byte[]>()));
+            }
+
+            if (stopIndex >= length)
+            {
+                stopIndex = length - 1;
+            }
+
+            if (stopIndex < startIndex)
+            {
+                return Task.FromResult(new ListRangeResult(ListResultStatus.Ok, Array.Empty<byte[]>()));
+            }
+
+            var count = stopIndex - startIndex + 1;
+            var values = new byte[count][];
+            for (int i = 0; i < count; i++)
+            {
+                values[i] = list[startIndex + i];
+            }
+
+            return Task.FromResult(new ListRangeResult(ListResultStatus.Ok, values));
+        }
+
+        /// <summary>
         /// Retrieves a stored value while honoring expiration.
         /// </summary>
         private byte[]? GetValue(string key)
@@ -3234,7 +3522,7 @@ namespace Dredis.Tests
                 return false;
             }
 
-            return _data.ContainsKey(key) || _hashes.ContainsKey(key) || _streams.ContainsKey(key);
+            return _data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _streams.ContainsKey(key);
         }
 
         /// <summary>
@@ -3257,6 +3545,7 @@ namespace Dredis.Tests
         {
             var removed = _data.Remove(key);
             removed |= _hashes.Remove(key);
+            removed |= _lists.Remove(key);
             removed |= _streams.Remove(key);
             _streamLastIds.Remove(key);
             _streamGroups.Remove(key);

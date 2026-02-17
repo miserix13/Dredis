@@ -139,6 +139,26 @@ namespace Dredis
                     await HandleHGetAllAsync(ctx, elements);
                     break;
 
+                case "LPUSH":
+                    await HandleListPushAsync(ctx, elements, left: true);
+                    break;
+
+                case "RPUSH":
+                    await HandleListPushAsync(ctx, elements, left: false);
+                    break;
+
+                case "LPOP":
+                    await HandleListPopAsync(ctx, elements, left: true);
+                    break;
+
+                case "RPOP":
+                    await HandleListPopAsync(ctx, elements, left: false);
+                    break;
+
+                case "LRANGE":
+                    await HandleListRangeAsync(ctx, elements);
+                    break;
+
                 case "XADD":
                     await HandleXAddAsync(ctx, elements);
                     break;
@@ -421,6 +441,129 @@ namespace Dredis
                 children[i] = value == null
                     ? FullBulkStringRedisMessage.Null
                     : new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(value));
+            }
+
+            WriteArray(ctx, children);
+        }
+
+        /// <summary>
+        /// Handles LPUSH/RPUSH commands.
+        /// </summary>
+        private async Task HandleListPushAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args,
+            bool left)
+        {
+            var commandName = left ? "lpush" : "rpush";
+            if (args.Count < 3)
+            {
+                WriteError(ctx, $"ERR wrong number of arguments for '{commandName}' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var values = new byte[args.Count - 2][];
+            for (int i = 2; i < args.Count; i++)
+            {
+                if (!TryGetBytes(args[i], out var value))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                values[i - 2] = value;
+            }
+
+            var result = await _store.ListPushAsync(key, values, left).ConfigureAwait(false);
+            if (result.Status == ListResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            WriteInteger(ctx, result.Length);
+        }
+
+        /// <summary>
+        /// Handles LPOP/RPOP commands.
+        /// </summary>
+        private async Task HandleListPopAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args,
+            bool left)
+        {
+            var commandName = left ? "lpop" : "rpop";
+            if (args.Count != 2)
+            {
+                WriteError(ctx, $"ERR wrong number of arguments for '{commandName}' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var result = await _store.ListPopAsync(key, left).ConfigureAwait(false);
+            if (result.Status == ListResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            if (result.Value == null)
+            {
+                WriteNullBulkString(ctx);
+                return;
+            }
+
+            WriteBulkString(ctx, result.Value);
+        }
+
+        /// <summary>
+        /// Handles the LRANGE command.
+        /// </summary>
+        private async Task HandleListRangeAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 4)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'lrange' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key) ||
+                !TryGetString(args[2], out var startText) ||
+                !TryGetString(args[3], out var stopText))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            if (!int.TryParse(startText, out var start) || !int.TryParse(stopText, out var stop))
+            {
+                WriteError(ctx, "ERR value is not an integer or out of range");
+                return;
+            }
+
+            var result = await _store.ListRangeAsync(key, start, stop).ConfigureAwait(false);
+            if (result.Status == ListResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            var children = new IRedisMessage[result.Values.Length];
+            for (int i = 0; i < result.Values.Length; i++)
+            {
+                children[i] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(result.Values[i]));
             }
 
             WriteArray(ctx, children);

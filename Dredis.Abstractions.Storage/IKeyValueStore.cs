@@ -87,6 +87,87 @@ namespace Dredis.Abstractions.Storage
     }
 
     /// <summary>
+    /// Describes results of list operations.
+    /// </summary>
+    public enum ListResultStatus
+    {
+        Ok,
+        WrongType
+    }
+
+    /// <summary>
+    /// Represents a list push result.
+    /// </summary>
+    public sealed class ListPushResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ListPushResult"/> class.
+        /// </summary>
+        public ListPushResult(ListResultStatus status, long length)
+        {
+            Status = status;
+            Length = length;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public ListResultStatus Status { get; }
+        /// <summary>
+        /// Gets the list length after the push.
+        /// </summary>
+        public long Length { get; }
+    }
+
+    /// <summary>
+    /// Represents a list pop result.
+    /// </summary>
+    public sealed class ListPopResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ListPopResult"/> class.
+        /// </summary>
+        public ListPopResult(ListResultStatus status, byte[]? value)
+        {
+            Status = status;
+            Value = value;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public ListResultStatus Status { get; }
+        /// <summary>
+        /// Gets the popped value, or null if empty.
+        /// </summary>
+        public byte[]? Value { get; }
+    }
+
+    /// <summary>
+    /// Represents a list range result.
+    /// </summary>
+    public sealed class ListRangeResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ListRangeResult"/> class.
+        /// </summary>
+        public ListRangeResult(ListResultStatus status, byte[][] values)
+        {
+            Status = status;
+            Values = values;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public ListResultStatus Status { get; }
+        /// <summary>
+        /// Gets the values in the requested range.
+        /// </summary>
+        public byte[][] Values { get; }
+    }
+
+    /// <summary>
     /// Describes results of setting a stream's last id.
     /// </summary>
     public enum StreamSetIdResultStatus
@@ -731,6 +812,46 @@ namespace Dredis.Abstractions.Storage
         /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
         /// <returns>A task that represents the asynchronous operation. The task result contains field/value pairs.</returns>
         Task<KeyValuePair<string, byte[]>[]> HashGetAllAsync(string key, CancellationToken token = default);
+
+        /// <summary>
+        /// Pushes one or more values onto a list.
+        /// </summary>
+        /// <param name="key">The list key.</param>
+        /// <param name="values">The values to push.</param>
+        /// <param name="left">True to push to the head, false to push to the tail.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the new length.</returns>
+        Task<ListPushResult> ListPushAsync(
+            string key,
+            byte[][] values,
+            bool left,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Pops a value from a list.
+        /// </summary>
+        /// <param name="key">The list key.</param>
+        /// <param name="left">True to pop from the head, false to pop from the tail.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the popped value.</returns>
+        Task<ListPopResult> ListPopAsync(
+            string key,
+            bool left,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Returns a range of values from a list.
+        /// </summary>
+        /// <param name="key">The list key.</param>
+        /// <param name="start">The starting index.</param>
+        /// <param name="stop">The ending index (inclusive).</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains range values.</returns>
+        Task<ListRangeResult> ListRangeAsync(
+            string key,
+            int start,
+            int stop,
+            CancellationToken token = default);
 
         /// <summary>
         /// Adds a stream entry. Returns the entry id, or null if the id is invalid or out of order.
