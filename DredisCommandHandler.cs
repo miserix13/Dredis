@@ -1048,6 +1048,7 @@ namespace Dredis
 
             if (block.HasValue)
             {
+                // For BLOCK requests, snapshot "$" to a concrete id per stream key in `keys`.
                 for (int i = 0; i < ids.Length; i++)
                 {
                     if (ids[i] == "$")
