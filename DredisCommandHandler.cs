@@ -3,6 +3,7 @@ using System.Text;
 using DotNetty.Buffers;
 using DotNetty.Codecs.Redis.Messages;
 using DotNetty.Transport.Channels;
+using Dredis.Abstractions.Storage;
 
 namespace Dredis
 {

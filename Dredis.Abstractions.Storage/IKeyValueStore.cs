@@ -1,6 +1,6 @@
 ﻿using System.Collections.Generic;
 
-namespace Dredis
+namespace Dredis.Abstractions.Storage
 {
     public enum SetCondition
     {

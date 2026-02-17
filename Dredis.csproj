@@ -30,4 +30,8 @@
     <Compile Remove="Dredis.Tests\obj\**\*.cs" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="Dredis.Abstractions.Storage\Dredis.Abstractions.Storage.csproj" />
+  </ItemGroup>
+
 </Project>

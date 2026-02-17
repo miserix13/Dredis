@@ -1,4 +1,5 @@
 <Solution>
+  <Project Path="Dredis.Abstractions.Storage/Dredis.Abstractions.Storage.csproj" />
   <Project Path="Dredis.csproj" />
   <Project Path="Dredis.Tests/Dredis.Tests.csproj" />
 </Solution>
