@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Text;
 using DotNetty.Buffers;
 using DotNetty.Codecs.Redis.Messages;
@@ -946,6 +947,119 @@ namespace Dredis.Tests
                 var response = ReadOutbound(channel);
                 var ok = Assert.IsType<SimpleStringRedisMessage>(response);
                 Assert.Equal("OK", ok.Content);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
+        /// Verifies XINFO STREAM returns metadata and entries.
+        /// </summary>
+        public async Task XInfo_Stream_ReturnsMetadata()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("XADD", "stream", "*", "a", "1"));
+                channel.RunPendingTasks();
+                var id1 = GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel)));
+
+                channel.WriteInbound(Command("XADD", "stream", "*", "b", "2"));
+                channel.RunPendingTasks();
+                var id2 = GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel)));
+
+                channel.WriteInbound(Command("XINFO", "STREAM", "stream"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var array = Assert.IsType<ArrayRedisMessage>(response);
+                Assert.True(array.Children.Count >= 8);
+
+                var items = GetHashPairs(array.Children);
+                Assert.Equal("2", items["length"]);
+                Assert.Equal(id2, items["last-generated-id"]);
+
+                var firstEntry = Assert.IsType<ArrayRedisMessage>(array.Children[5]);
+                var firstId = GetBulkOrNull(firstEntry.Children[0]);
+                Assert.Equal(id1, firstId);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
+        /// Verifies XINFO GROUPS returns group metadata.
+        /// </summary>
+        public async Task XInfo_Groups_ReturnsGroups()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("XGROUP", "CREATE", "stream", "group", "-", "MKSTREAM"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("XINFO", "GROUPS", "stream"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var array = Assert.IsType<ArrayRedisMessage>(response);
+                Assert.Single(array.Children);
+
+                var groupArray = Assert.IsType<ArrayRedisMessage>(array.Children[0]);
+                var groupItems = GetHashPairs(groupArray.Children);
+                Assert.Equal("group", groupItems["name"]);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
+        /// Verifies XINFO CONSUMERS returns consumer metadata.
+        /// </summary>
+        public async Task XInfo_Consumers_ReturnsConsumers()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("XGROUP", "CREATE", "stream", "group", "-", "MKSTREAM"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("XADD", "stream", "*", "a", "1"));
+                channel.RunPendingTasks();
+                var id = GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel)));
+
+                channel.WriteInbound(Command("XREADGROUP", "GROUP", "group", "consumer", "STREAMS", "stream", ">"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("XINFO", "CONSUMERS", "stream", "group"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var array = Assert.IsType<ArrayRedisMessage>(response);
+                Assert.Single(array.Children);
+
+                var consumerArray = Assert.IsType<ArrayRedisMessage>(array.Children[0]);
+                var consumerItems = GetHashPairs(consumerArray.Children);
+                Assert.Equal("consumer", consumerItems["name"]);
+                Assert.Equal("1", consumerItems["pending"]);
             }
             finally
             {
@@ -2097,6 +2211,118 @@ namespace Dredis.Tests
             }
 
             return Task.FromResult(results.ToArray());
+        }
+
+        /// <summary>
+        /// Returns stream metadata for XINFO STREAM.
+        /// </summary>
+        public Task<StreamInfoResult> StreamInfoAsync(string key, CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+                return Task.FromResult(new StreamInfoResult(StreamInfoResultStatus.NoStream, null));
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key))
+            {
+                return Task.FromResult(new StreamInfoResult(StreamInfoResultStatus.WrongType, null));
+            }
+
+            if (!_streams.TryGetValue(key, out var stream))
+            {
+                return Task.FromResult(new StreamInfoResult(StreamInfoResultStatus.NoStream, null));
+            }
+
+            var length = stream.Count;
+            var firstEntry = length > 0 ? new StreamEntry(stream[0].Id, stream[0].Fields) : null;
+            var lastEntry = length > 0 ? new StreamEntry(stream[length - 1].Id, stream[length - 1].Fields) : null;
+            var lastId = _streamLastIds.TryGetValue(key, out var last) ? FormatStreamId(last) : lastEntry?.Id;
+
+            var info = new StreamInfo(length, lastId, firstEntry, lastEntry);
+            return Task.FromResult(new StreamInfoResult(StreamInfoResultStatus.Ok, info));
+        }
+
+        /// <summary>
+        /// Returns group metadata for XINFO GROUPS.
+        /// </summary>
+        public Task<StreamGroupsInfoResult> StreamGroupsInfoAsync(string key, CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+                return Task.FromResult(new StreamGroupsInfoResult(StreamInfoResultStatus.NoStream, Array.Empty<StreamGroupInfo>()));
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key))
+            {
+                return Task.FromResult(new StreamGroupsInfoResult(StreamInfoResultStatus.WrongType, Array.Empty<StreamGroupInfo>()));
+            }
+
+            if (!_streams.ContainsKey(key))
+            {
+                return Task.FromResult(new StreamGroupsInfoResult(StreamInfoResultStatus.NoStream, Array.Empty<StreamGroupInfo>()));
+            }
+
+            if (!_streamGroups.TryGetValue(key, out var groups))
+            {
+                return Task.FromResult(new StreamGroupsInfoResult(StreamInfoResultStatus.Ok, Array.Empty<StreamGroupInfo>()));
+            }
+
+            var groupInfos = new List<StreamGroupInfo>();
+            foreach (var pair in groups)
+            {
+                var state = pair.Value;
+                var consumerCount = state.Pending.Values.Select(p => p.Consumer).Distinct(StringComparer.Ordinal).LongCount();
+                var pendingCount = state.Pending.Count;
+                var lastDelivered = FormatStreamId(state.LastDeliveredId);
+                groupInfos.Add(new StreamGroupInfo(pair.Key, consumerCount, pendingCount, lastDelivered));
+            }
+
+            return Task.FromResult(new StreamGroupsInfoResult(StreamInfoResultStatus.Ok, groupInfos.ToArray()));
+        }
+
+        /// <summary>
+        /// Returns consumer metadata for XINFO CONSUMERS.
+        /// </summary>
+        public Task<StreamConsumersInfoResult> StreamConsumersInfoAsync(
+            string key,
+            string group,
+            CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+                return Task.FromResult(new StreamConsumersInfoResult(StreamInfoResultStatus.NoStream, Array.Empty<StreamConsumerInfo>()));
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key))
+            {
+                return Task.FromResult(new StreamConsumersInfoResult(StreamInfoResultStatus.WrongType, Array.Empty<StreamConsumerInfo>()));
+            }
+
+            if (!_streams.ContainsKey(key))
+            {
+                return Task.FromResult(new StreamConsumersInfoResult(StreamInfoResultStatus.NoStream, Array.Empty<StreamConsumerInfo>()));
+            }
+
+            if (!_streamGroups.TryGetValue(key, out var groups) || !groups.TryGetValue(group, out var state))
+            {
+                return Task.FromResult(new StreamConsumersInfoResult(StreamInfoResultStatus.NoGroup, Array.Empty<StreamConsumerInfo>()));
+            }
+
+            var now = DateTimeOffset.UtcNow;
+            var consumers = state.Pending
+                .GroupBy(p => p.Value.Consumer)
+                .Select(grouping =>
+                {
+                    var latest = grouping.Max(p => p.Value.DeliveryTime);
+                    var idleMs = (long)(now - latest).TotalMilliseconds;
+                    return new StreamConsumerInfo(grouping.Key, grouping.LongCount(), idleMs);
+                })
+                .ToArray();
+
+            return Task.FromResult(new StreamConsumersInfoResult(StreamInfoResultStatus.Ok, consumers));
         }
 
         /// <summary>

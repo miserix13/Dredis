@@ -330,6 +330,186 @@ namespace Dredis.Abstractions.Storage
     }
 
     /// <summary>
+    /// Describes results for stream info operations.
+    /// </summary>
+    public enum StreamInfoResultStatus
+    {
+        Ok,
+        NoGroup,
+        NoStream,
+        WrongType
+    }
+
+    /// <summary>
+    /// Represents stream metadata for XINFO STREAM.
+    /// </summary>
+    public sealed class StreamInfo
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="StreamInfo"/> class.
+        /// </summary>
+        public StreamInfo(long length, string? lastGeneratedId, StreamEntry? firstEntry, StreamEntry? lastEntry)
+        {
+            Length = length;
+            LastGeneratedId = lastGeneratedId;
+            FirstEntry = firstEntry;
+            LastEntry = lastEntry;
+        }
+
+        /// <summary>
+        /// Gets the stream length.
+        /// </summary>
+        public long Length { get; }
+        /// <summary>
+        /// Gets the last generated id.
+        /// </summary>
+        public string? LastGeneratedId { get; }
+        /// <summary>
+        /// Gets the first entry, if available.
+        /// </summary>
+        public StreamEntry? FirstEntry { get; }
+        /// <summary>
+        /// Gets the last entry, if available.
+        /// </summary>
+        public StreamEntry? LastEntry { get; }
+    }
+
+    /// <summary>
+    /// Represents stream group metadata for XINFO GROUPS.
+    /// </summary>
+    public sealed class StreamGroupInfo
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="StreamGroupInfo"/> class.
+        /// </summary>
+        public StreamGroupInfo(string name, long consumers, long pending, string lastDeliveredId)
+        {
+            Name = name;
+            Consumers = consumers;
+            Pending = pending;
+            LastDeliveredId = lastDeliveredId;
+        }
+
+        /// <summary>
+        /// Gets the group name.
+        /// </summary>
+        public string Name { get; }
+        /// <summary>
+        /// Gets the number of consumers.
+        /// </summary>
+        public long Consumers { get; }
+        /// <summary>
+        /// Gets the number of pending entries.
+        /// </summary>
+        public long Pending { get; }
+        /// <summary>
+        /// Gets the last delivered id.
+        /// </summary>
+        public string LastDeliveredId { get; }
+    }
+
+    /// <summary>
+    /// Represents consumer metadata for XINFO CONSUMERS.
+    /// </summary>
+    public sealed class StreamConsumerInfo
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="StreamConsumerInfo"/> class.
+        /// </summary>
+        public StreamConsumerInfo(string name, long pending, long idleTimeMs)
+        {
+            Name = name;
+            Pending = pending;
+            IdleTimeMs = idleTimeMs;
+        }
+
+        /// <summary>
+        /// Gets the consumer name.
+        /// </summary>
+        public string Name { get; }
+        /// <summary>
+        /// Gets the pending entry count.
+        /// </summary>
+        public long Pending { get; }
+        /// <summary>
+        /// Gets the idle time in milliseconds.
+        /// </summary>
+        public long IdleTimeMs { get; }
+    }
+
+    /// <summary>
+    /// Represents a result for XINFO STREAM.
+    /// </summary>
+    public sealed class StreamInfoResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="StreamInfoResult"/> class.
+        /// </summary>
+        public StreamInfoResult(StreamInfoResultStatus status, StreamInfo? info)
+        {
+            Status = status;
+            Info = info;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public StreamInfoResultStatus Status { get; }
+        /// <summary>
+        /// Gets the stream info payload.
+        /// </summary>
+        public StreamInfo? Info { get; }
+    }
+
+    /// <summary>
+    /// Represents a result for XINFO GROUPS.
+    /// </summary>
+    public sealed class StreamGroupsInfoResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="StreamGroupsInfoResult"/> class.
+        /// </summary>
+        public StreamGroupsInfoResult(StreamInfoResultStatus status, StreamGroupInfo[] groups)
+        {
+            Status = status;
+            Groups = groups;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public StreamInfoResultStatus Status { get; }
+        /// <summary>
+        /// Gets the group info list.
+        /// </summary>
+        public StreamGroupInfo[] Groups { get; }
+    }
+
+    /// <summary>
+    /// Represents a result for XINFO CONSUMERS.
+    /// </summary>
+    public sealed class StreamConsumersInfoResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="StreamConsumersInfoResult"/> class.
+        /// </summary>
+        public StreamConsumersInfoResult(StreamInfoResultStatus status, StreamConsumerInfo[] consumers)
+        {
+            Status = status;
+            Consumers = consumers;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public StreamInfoResultStatus Status { get; }
+        /// <summary>
+        /// Gets the consumer info list.
+        /// </summary>
+        public StreamConsumerInfo[] Consumers { get; }
+    }
+
+    /// <summary>
     /// Key-Value Storage abstraction for Dredis.
     /// </summary>
     public interface IKeyValueStore
@@ -594,6 +774,34 @@ namespace Dredis.Abstractions.Storage
             int? maxLength = null,
             string? minId = null,
             bool approximate = false,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Returns stream metadata for XINFO STREAM.
+        /// </summary>
+        /// <param name="key">The stream key.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains stream info.</returns>
+        Task<StreamInfoResult> StreamInfoAsync(string key, CancellationToken token = default);
+
+        /// <summary>
+        /// Returns group metadata for XINFO GROUPS.
+        /// </summary>
+        /// <param name="key">The stream key.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains group info.</returns>
+        Task<StreamGroupsInfoResult> StreamGroupsInfoAsync(string key, CancellationToken token = default);
+
+        /// <summary>
+        /// Returns consumer metadata for XINFO CONSUMERS.
+        /// </summary>
+        /// <param name="key">The stream key.</param>
+        /// <param name="group">The consumer group name.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains consumer info.</returns>
+        Task<StreamConsumersInfoResult> StreamConsumersInfoAsync(
+            string key,
+            string group,
             CancellationToken token = default);
 
         /// <summary>

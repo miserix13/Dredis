@@ -187,6 +187,10 @@ namespace Dredis
                     await HandleXClaimAsync(ctx, elements);
                     break;
 
+                case "XINFO":
+                    await HandleXInfoAsync(ctx, elements);
+                    break;
+
                 default:
                     WriteError(ctx, $"ERR unknown command '{cmd}'");
                     break;
@@ -1971,55 +1975,220 @@ namespace Dredis
                     array.Add(new ArrayRedisMessage(entryArray));
                 }
                 await ctx.WriteAndFlushAsync(new ArrayRedisMessage(array));
-            }}
+            }
+        }
 
-            /// <summary>
-            /// Builds RESP stream messages from stream read results.
-            /// </summary>
-            private static List<IRedisMessage> BuildStreamMessages(StreamReadResult[] results)
+        /// <summary>
+        /// Handles the XINFO command.
+        /// </summary>
+        private async Task HandleXInfoAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count < 3 || !TryGetString(args[1], out var subcommand))
             {
-                var streamMessages = new List<IRedisMessage>();
+                WriteError(ctx, "ERR wrong number of arguments for 'xinfo' command");
+                return;
+            }
 
-                foreach (var result in results)
+            if (!TryGetString(args[2], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            switch (subcommand.ToUpperInvariant())
+            {
+                case "STREAM":
+                    await HandleXInfoStreamAsync(ctx, key).ConfigureAwait(false);
+                    break;
+
+                case "GROUPS":
+                    await HandleXInfoGroupsAsync(ctx, key).ConfigureAwait(false);
+                    break;
+
+                case "CONSUMERS":
+                    if (args.Count != 4 || !TryGetString(args[3], out var group))
+                    {
+                        WriteError(ctx, "ERR wrong number of arguments for 'xinfo' command");
+                        return;
+                    }
+                    await HandleXInfoConsumersAsync(ctx, key, group).ConfigureAwait(false);
+                    break;
+
+                default:
+                    WriteError(ctx, "ERR unknown subcommand or wrong number of arguments for 'xinfo' command");
+                    break;
+            }
+        }
+
+        private async Task HandleXInfoStreamAsync(IChannelHandlerContext ctx, string key)
+        {
+            var result = await _store.StreamInfoAsync(key).ConfigureAwait(false);
+            switch (result.Status)
+            {
+                case StreamInfoResultStatus.WrongType:
+                    WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                    return;
+                case StreamInfoResultStatus.NoStream:
+                    WriteError(ctx, "ERR no such key");
+                    return;
+            }
+
+            var info = result.Info;
+            var items = new List<IRedisMessage>
+            {
+                BulkString("length"),
+                new IntegerRedisMessage(info?.Length ?? 0),
+                BulkString("last-generated-id"),
+                info?.LastGeneratedId == null ? FullBulkStringRedisMessage.Null : BulkString(info.LastGeneratedId),
+                BulkString("first-entry"),
+                info?.FirstEntry == null ? FullBulkStringRedisMessage.Null : BuildStreamEntryMessage(info.FirstEntry),
+                BulkString("last-entry"),
+                info?.LastEntry == null ? FullBulkStringRedisMessage.Null : BuildStreamEntryMessage(info.LastEntry)
+            };
+
+            await ctx.WriteAndFlushAsync(new ArrayRedisMessage(items));
+        }
+
+        private async Task HandleXInfoGroupsAsync(IChannelHandlerContext ctx, string key)
+        {
+            var result = await _store.StreamGroupsInfoAsync(key).ConfigureAwait(false);
+            switch (result.Status)
+            {
+                case StreamInfoResultStatus.WrongType:
+                    WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                    return;
+                case StreamInfoResultStatus.NoStream:
+                    WriteError(ctx, "ERR no such key");
+                    return;
+            }
+
+            var groups = new List<IRedisMessage>();
+            foreach (var group in result.Groups)
+            {
+                var groupItems = new List<IRedisMessage>
                 {
-                    if (result.Entries.Length == 0)
-                    {
-                        continue;
-                    }
+                    BulkString("name"),
+                    BulkString(group.Name),
+                    BulkString("consumers"),
+                    new IntegerRedisMessage(group.Consumers),
+                    BulkString("pending"),
+                    new IntegerRedisMessage(group.Pending),
+                    BulkString("last-delivered-id"),
+                    BulkString(group.LastDeliveredId)
+                };
+                groups.Add(new ArrayRedisMessage(groupItems));
+            }
 
-                    var entryMessages = new IRedisMessage[result.Entries.Length];
-                    for (int i = 0; i < result.Entries.Length; i++)
-                    {
-                        var entry = result.Entries[i];
-                        var fieldChildren = new IRedisMessage[entry.Fields.Length * 2];
+            await ctx.WriteAndFlushAsync(new ArrayRedisMessage(groups));
+        }
 
-                        for (int j = 0; j < entry.Fields.Length; j++)
-                        {
-                            var fieldBytes = Utf8.GetBytes(entry.Fields[j].Key);
-                            fieldChildren[j * 2] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(fieldBytes));
-                            fieldChildren[j * 2 + 1] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(entry.Fields[j].Value));
-                        }
+        private async Task HandleXInfoConsumersAsync(IChannelHandlerContext ctx, string key, string group)
+        {
+            var result = await _store.StreamConsumersInfoAsync(key, group).ConfigureAwait(false);
+            switch (result.Status)
+            {
+                case StreamInfoResultStatus.WrongType:
+                    WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                    return;
+                case StreamInfoResultStatus.NoStream:
+                    WriteError(ctx, "ERR no such key");
+                    return;
+                case StreamInfoResultStatus.NoGroup:
+                    WriteError(ctx, "NOGROUP No such consumer group");
+                    return;
+            }
 
-                        var entryChildren = new IRedisMessage[2]
-                        {
-                            new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(entry.Id))),
-                            new ArrayRedisMessage(fieldChildren)
-                        };
+            var consumers = new List<IRedisMessage>();
+            foreach (var consumer in result.Consumers)
+            {
+                var consumerItems = new List<IRedisMessage>
+                {
+                    BulkString("name"),
+                    BulkString(consumer.Name),
+                    BulkString("pending"),
+                    new IntegerRedisMessage(consumer.Pending),
+                    BulkString("idle"),
+                    new IntegerRedisMessage(consumer.IdleTimeMs)
+                };
+                consumers.Add(new ArrayRedisMessage(consumerItems));
+            }
 
-                        entryMessages[i] = new ArrayRedisMessage(entryChildren);
-                    }
+            await ctx.WriteAndFlushAsync(new ArrayRedisMessage(consumers));
+        }
 
-                    var streamChildren = new IRedisMessage[2]
-                    {
-                        new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(result.Key))),
-                        new ArrayRedisMessage(entryMessages)
-                    };
+        /// <summary>
+        /// Builds RESP stream messages from stream read results.
+        /// </summary>
+        private static List<IRedisMessage> BuildStreamMessages(StreamReadResult[] results)
+        {
+            var streamMessages = new List<IRedisMessage>();
 
-                    streamMessages.Add(new ArrayRedisMessage(streamChildren));
+            foreach (var result in results)
+            {
+                if (result.Entries.Length == 0)
+                {
+                    continue;
                 }
 
-                return streamMessages;
+                var entryMessages = new IRedisMessage[result.Entries.Length];
+                for (int i = 0; i < result.Entries.Length; i++)
+                {
+                    var entry = result.Entries[i];
+                    var fieldChildren = new IRedisMessage[entry.Fields.Length * 2];
+
+                    for (int j = 0; j < entry.Fields.Length; j++)
+                    {
+                        var fieldBytes = Utf8.GetBytes(entry.Fields[j].Key);
+                        fieldChildren[j * 2] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(fieldBytes));
+                        fieldChildren[j * 2 + 1] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(entry.Fields[j].Value));
+                    }
+
+                    var entryChildren = new IRedisMessage[2]
+                    {
+                        new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(entry.Id))),
+                        new ArrayRedisMessage(fieldChildren)
+                    };
+
+                    entryMessages[i] = new ArrayRedisMessage(entryChildren);
+                }
+
+                var streamChildren = new IRedisMessage[2]
+                {
+                    new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(result.Key))),
+                    new ArrayRedisMessage(entryMessages)
+                };
+
+                streamMessages.Add(new ArrayRedisMessage(streamChildren));
             }
+
+            return streamMessages;
+        }
+
+        private static IRedisMessage BuildStreamEntryMessage(StreamEntry entry)
+        {
+            var fieldChildren = new IRedisMessage[entry.Fields.Length * 2];
+            for (int i = 0; i < entry.Fields.Length; i++)
+            {
+                var fieldBytes = Utf8.GetBytes(entry.Fields[i].Key);
+                fieldChildren[i * 2] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(fieldBytes));
+                fieldChildren[i * 2 + 1] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(entry.Fields[i].Value));
+            }
+
+            var entryChildren = new IRedisMessage[2]
+            {
+                BulkString(entry.Id),
+                new ArrayRedisMessage(fieldChildren)
+            };
+
+            return new ArrayRedisMessage(entryChildren);
+        }
+
+        private static IRedisMessage BulkString(string value)
+        {
+            return new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(value)));
+        }
         
 
         /// <summary>
