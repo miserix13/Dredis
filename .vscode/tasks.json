@@ -11,6 +11,16 @@
 			"isBackground": false,
 			"problemMatcher": [],
 			"group": "test"
+		},
+		{
+			"label": "dotnet build",
+			"type": "shell",
+			"command": "dotnet",
+			"args": [
+				"build"
+			],
+			"isBackground": false,
+			"group": "build"
 		}
 	]
 }
