@@ -1663,5 +1663,166 @@ namespace Dredis.Abstractions.Storage
         /// <returns>A task that represents the asynchronous operation. The task result contains the number of keys removed from
         /// the cache.</returns>
         Task<long> CleanUpExpiredKeysAsync(CancellationToken token = default);
+
+        /// <summary>
+        /// Sets a JSON value at the specified key and path.
+        /// </summary>
+        /// <param name="key">The JSON document key.</param>
+        /// <param name="path">The JSONPath (e.g., "$", "$.users[0].name").</param>
+        /// <param name="value">The JSON value as a byte array (UTF-8 encoded JSON).</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the status.</returns>
+        Task<JsonSetResult> JsonSetAsync(
+            string key,
+            string path,
+            byte[] value,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Gets a JSON value at the specified path(s).
+        /// </summary>
+        /// <param name="key">The JSON document key.</param>
+        /// <param name="paths">One or more JSONPaths.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the values.</returns>
+        Task<JsonGetResult> JsonGetAsync(
+            string key,
+            string[] paths,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Deletes values at the specified path(s).
+        /// </summary>
+        /// <param name="key">The JSON document key.</param>
+        /// <param name="paths">One or more JSONPaths.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the count deleted.</returns>
+        Task<JsonDelResult> JsonDelAsync(
+            string key,
+            string[] paths,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Gets the type of value at the specified path(s).
+        /// </summary>
+        /// <param name="key">The JSON document key.</param>
+        /// <param name="paths">One or more JSONPaths.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the types.</returns>
+        Task<JsonTypeResult> JsonTypeAsync(
+            string key,
+            string[] paths,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Gets string length at the specified path(s).
+        /// </summary>
+        /// <param name="key">The JSON document key.</param>
+        /// <param name="paths">One or more JSONPaths.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains lengths.</returns>
+        Task<JsonArrayResult> JsonStrlenAsync(
+            string key,
+            string[] paths,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Gets array length at the specified path(s).
+        /// </summary>
+        /// <param name="key">The JSON document key.</param>
+        /// <param name="paths">One or more JSONPaths.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains array lengths.</returns>
+        Task<JsonArrayResult> JsonArrlenAsync(
+            string key,
+            string[] paths,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Appends value(s) to arrays at the specified path(s).
+        /// </summary>
+        /// <param name="key">The JSON document key.</param>
+        /// <param name="path">The JSONPath to the array.</param>
+        /// <param name="values">Values to append (each as UTF-8 encoded JSON).</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the new array length.</returns>
+        Task<JsonArrayResult> JsonArrappendAsync(
+            string key,
+            string path,
+            byte[][] values,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Gets values from an array at the specified path(s).
+        /// </summary>
+        /// <param name="key">The JSON document key.</param>
+        /// <param name="path">The JSONPath to the array.</param>
+        /// <param name="start">The start index.</param>
+        /// <param name="end">The stop index (inclusive).</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the array values.</returns>
+        Task<JsonGetResult> JsonArrindexAsync(
+            string key,
+            string path,
+            byte[] value,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Inserts value(s) at an index in arrays.
+        /// </summary>
+        /// <param name="key">The JSON document key.</param>
+        /// <param name="path">The JSONPath to the array.</param>
+        /// <param name="index">The index to insert at.</param>
+        /// <param name="values">Values to insert (each as UTF-8 encoded JSON).</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the new array length.</returns>
+        Task<JsonArrayResult> JsonArrinsertAsync(
+            string key,
+            string path,
+            int index,
+            byte[][] values,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Removes elements from arrays.
+        /// </summary>
+        /// <param name="key">The JSON document key.</param>
+        /// <param name="path">The JSONPath to the array.</param>
+        /// <param name="index">The index to remove, or null to remove all occurrences of a value.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the new array length.</returns>
+        Task<JsonArrayResult> JsonArrremAsync(
+            string key,
+            string path,
+            int? index,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Trims arrays to a range.
+        /// </summary>
+        /// <param name="key">The JSON document key.</param>
+        /// <param name="path">The JSONPath to the array.</param>
+        /// <param name="start">The start index.</param>
+        /// <param name="stop">The stop index (inclusive).</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the new array length.</returns>
+        Task<JsonArrayResult> JsonArrtrimAsync(
+            string key,
+            string path,
+            int start,
+            int stop,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Gets multiple JSON documents by key.
+        /// </summary>
+        /// <param name="keys">The keys to retrieve.</param>
+        /// <param name="path">The JSONPath for all keys.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the values.</returns>
+        Task<JsonMGetResult> JsonMgetAsync(
+            string[] keys,
+            string path,
+            CancellationToken token = default);
     }
 }

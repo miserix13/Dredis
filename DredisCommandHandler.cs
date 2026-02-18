@@ -592,7 +592,7 @@ namespace Dredis
     /// <summary>
     /// Bridges Redis commands (via DotNetty codec) to the IKeyValueStore abstraction.
     /// </summary>
-    public sealed class DredisCommandHandler : SimpleChannelInboundHandler<IRedisMessage>
+    public sealed partial class DredisCommandHandler : SimpleChannelInboundHandler<IRedisMessage>
     {
         private readonly IKeyValueStore _store;
         private static readonly Encoding Utf8 = new UTF8Encoding(false);
@@ -937,6 +937,54 @@ namespace Dredis
 
                 case "XINFO":
                     await HandleXInfoAsync(ctx, elements);
+                    break;
+
+                case "JSON.SET":
+                    await HandleJsonSetAsync(ctx, elements);
+                    break;
+
+                case "JSON.GET":
+                    await HandleJsonGetAsync(ctx, elements);
+                    break;
+
+                case "JSON.DEL":
+                    await HandleJsonDelAsync(ctx, elements);
+                    break;
+
+                case "JSON.TYPE":
+                    await HandleJsonTypeAsync(ctx, elements);
+                    break;
+
+                case "JSON.STRLEN":
+                    await HandleJsonStrlenAsync(ctx, elements);
+                    break;
+
+                case "JSON.ARRLEN":
+                    await HandleJsonArrlenAsync(ctx, elements);
+                    break;
+
+                case "JSON.ARRAPPEND":
+                    await HandleJsonArrappendAsync(ctx, elements);
+                    break;
+
+                case "JSON.ARRINDEX":
+                    await HandleJsonArrindexAsync(ctx, elements);
+                    break;
+
+                case "JSON.ARRINSERT":
+                    await HandleJsonArrinsertAsync(ctx, elements);
+                    break;
+
+                case "JSON.ARRREM":
+                    await HandleJsonArrremAsync(ctx, elements);
+                    break;
+
+                case "JSON.ARRTRIM":
+                    await HandleJsonArrtrimAsync(ctx, elements);
+                    break;
+
+                case "JSON.MGET":
+                    await HandleJsonMgetAsync(ctx, elements);
                     break;
 
                 default:

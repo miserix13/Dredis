@@ -3644,6 +3644,424 @@ namespace Dredis.Tests
         }
 
         /// <summary>
+        /// Sets a JSON value at the specified key and path.
+        /// </summary>
+        public Task<JsonSetResult> JsonSetAsync(
+            string key,
+            string path,
+            byte[] value,
+            CancellationToken token = default)
+        {
+            try
+            {
+                // Get or create the JSON document
+                byte[] docBytes;
+                bool isNew = false;
+
+                if (!_data.TryGetValue(key, out var existing))
+                {
+                    if (path != "$")
+                    {
+                        return Task.FromResult(new JsonSetResult(JsonResultStatus.PathNotFound));
+                    }
+                    // Create new root document
+                    docBytes = value;
+                    isNew = true;
+                }
+                else
+                {
+                    docBytes = existing;
+                }
+
+                var wrapper = JsonWrapper.TryParse(docBytes);
+                if (wrapper == null)
+                {
+                    return Task.FromResult(new JsonSetResult(JsonResultStatus.InvalidJson));
+                }
+
+                // For now, only support setting the root
+                if (path != "$")
+                {
+                    return Task.FromResult(new JsonSetResult(JsonResultStatus.InvalidPath));
+                }
+
+                var newWrapper = JsonWrapper.TryParse(value);
+                if (newWrapper == null)
+                {
+                    return Task.FromResult(new JsonSetResult(JsonResultStatus.InvalidJson));
+                }
+
+                _data[key] = value;
+                return Task.FromResult(new JsonSetResult(JsonResultStatus.Ok, isNew));
+            }
+            catch
+            {
+                return Task.FromResult(new JsonSetResult(JsonResultStatus.InvalidJson));
+            }
+        }
+
+        /// <summary>
+        /// Gets a JSON value at the specified path(s).
+        /// </summary>
+        public Task<JsonGetResult> JsonGetAsync(
+            string key,
+            string[] paths,
+            CancellationToken token = default)
+        {
+            try
+            {
+                if (!_data.TryGetValue(key, out var docBytes))
+                {
+                    return Task.FromResult(new JsonGetResult(JsonResultStatus.PathNotFound));
+                }
+
+                var wrapper = JsonWrapper.TryParse(docBytes);
+                if (wrapper == null)
+                {
+                    return Task.FromResult(new JsonGetResult(JsonResultStatus.InvalidJson));
+                }
+
+                if (paths.Length == 1)
+                {
+                    var elements = wrapper.GetAtPaths(paths[0]);
+                    if (elements.Count == 0)
+                    {
+                        return Task.FromResult(new JsonGetResult(JsonResultStatus.PathNotFound));
+                    }
+
+                    var value = System.Text.Encoding.UTF8.GetBytes(elements[0].GetRawText());
+                    return Task.FromResult(new JsonGetResult(JsonResultStatus.Ok, value: value));
+                }
+                else
+                {
+                    var values = new List<byte[]>();
+                    foreach (var path in paths)
+                    {
+                        var elements = wrapper.GetAtPaths(path);
+                        if (elements.Count > 0)
+                        {
+                            values.Add(System.Text.Encoding.UTF8.GetBytes(elements[0].GetRawText()));
+                        }
+                    }
+
+                    return Task.FromResult(new JsonGetResult(JsonResultStatus.Ok, values: values.ToArray()));
+                }
+            }
+            catch
+            {
+                return Task.FromResult(new JsonGetResult(JsonResultStatus.InvalidJson));
+            }
+        }
+
+        /// <summary>
+        /// Deletes values at the specified path(s).
+        /// </summary>
+        public Task<JsonDelResult> JsonDelAsync(
+            string key,
+            string[] paths,
+            CancellationToken token = default)
+        {
+            try
+            {
+                if (!_data.TryGetValue(key, out var docBytes))
+                {
+                    return Task.FromResult(new JsonDelResult(JsonResultStatus.PathNotFound, 0));
+                }
+
+                var wrapper = JsonWrapper.TryParse(docBytes);
+                if (wrapper == null)
+                {
+                    return Task.FromResult(new JsonDelResult(JsonResultStatus.InvalidJson, 0));
+                }
+
+                // For now, only support deleting the root
+                if (paths.Length == 1 && paths[0] == "$")
+                {
+                    _data.Remove(key);
+                    return Task.FromResult(new JsonDelResult(JsonResultStatus.Ok, 1));
+                }
+
+                return Task.FromResult(new JsonDelResult(JsonResultStatus.InvalidPath, 0));
+            }
+            catch
+            {
+                return Task.FromResult(new JsonDelResult(JsonResultStatus.InvalidJson, 0));
+            }
+        }
+
+        /// <summary>
+        /// Gets the type of value at the specified path(s).
+        /// </summary>
+        public Task<JsonTypeResult> JsonTypeAsync(
+            string key,
+            string[] paths,
+            CancellationToken token = default)
+        {
+            try
+            {
+                if (!_data.TryGetValue(key, out var docBytes))
+                {
+                    return Task.FromResult(new JsonTypeResult(JsonResultStatus.PathNotFound));
+                }
+
+                var wrapper = JsonWrapper.TryParse(docBytes);
+                if (wrapper == null)
+                {
+                    return Task.FromResult(new JsonTypeResult(JsonResultStatus.InvalidJson));
+                }
+
+                var types = new List<string>();
+                foreach (var path in paths)
+                {
+                    var elements = wrapper.GetAtPaths(path);
+                    if (elements.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    var type = elements[0].ValueKind switch
+                    {
+                        System.Text.Json.JsonValueKind.Null => "null",
+                        System.Text.Json.JsonValueKind.True => "boolean",
+                        System.Text.Json.JsonValueKind.False => "boolean",
+                        System.Text.Json.JsonValueKind.Number => "number",
+                        System.Text.Json.JsonValueKind.String => "string",
+                        System.Text.Json.JsonValueKind.Array => "array",
+                        System.Text.Json.JsonValueKind.Object => "object",
+                        _ => "unknown"
+                    };
+                    types.Add(type);
+                }
+
+                return Task.FromResult(new JsonTypeResult(JsonResultStatus.Ok, types.ToArray()));
+            }
+            catch
+            {
+                return Task.FromResult(new JsonTypeResult(JsonResultStatus.InvalidJson));
+            }
+        }
+
+        /// <summary>
+        /// Gets string length at the specified path(s).
+        /// </summary>
+        public Task<JsonArrayResult> JsonStrlenAsync(
+            string key,
+            string[] paths,
+            CancellationToken token = default)
+        {
+            try
+            {
+                if (!_data.TryGetValue(key, out var docBytes))
+                {
+                    return Task.FromResult(new JsonArrayResult(JsonResultStatus.PathNotFound));
+                }
+
+                var wrapper = JsonWrapper.TryParse(docBytes);
+                if (wrapper == null)
+                {
+                    return Task.FromResult(new JsonArrayResult(JsonResultStatus.InvalidJson));
+                }
+
+                if (paths.Length == 1)
+                {
+                    var elements = wrapper.GetAtPaths(paths[0]);
+                    if (elements.Count == 0 || elements[0].ValueKind != System.Text.Json.JsonValueKind.String)
+                    {
+                        return Task.FromResult(new JsonArrayResult(JsonResultStatus.WrongType));
+                    }
+
+                    var len = elements[0].GetString()?.Length ?? 0;
+                    return Task.FromResult(new JsonArrayResult(JsonResultStatus.Ok, count: len));
+                }
+                else
+                {
+                    var lengths = new List<long>();
+                    foreach (var path in paths)
+                    {
+                        var elements = wrapper.GetAtPaths(path);
+                        if (elements.Count == 0)
+                        {
+                            lengths.Add(0);
+                        }
+                        else if (elements[0].ValueKind != System.Text.Json.JsonValueKind.String)
+                        {
+                            return Task.FromResult(new JsonArrayResult(JsonResultStatus.WrongType));
+                        }
+                        else
+                        {
+                            lengths.Add(elements[0].GetString()?.Length ?? 0);
+                        }
+                    }
+
+                    return Task.FromResult(new JsonArrayResult(JsonResultStatus.Ok, counts: lengths.ToArray()));
+                }
+            }
+            catch
+            {
+                return Task.FromResult(new JsonArrayResult(JsonResultStatus.InvalidJson));
+            }
+        }
+
+        /// <summary>
+        /// Gets array length at the specified path(s).
+        /// </summary>
+        public Task<JsonArrayResult> JsonArrlenAsync(
+            string key,
+            string[] paths,
+            CancellationToken token = default)
+        {
+            try
+            {
+                if (!_data.TryGetValue(key, out var docBytes))
+                {
+                    return Task.FromResult(new JsonArrayResult(JsonResultStatus.PathNotFound));
+                }
+
+                var wrapper = JsonWrapper.TryParse(docBytes);
+                if (wrapper == null)
+                {
+                    return Task.FromResult(new JsonArrayResult(JsonResultStatus.InvalidJson));
+                }
+
+                if (paths.Length == 1)
+                {
+                    var elements = wrapper.GetAtPaths(paths[0]);
+                    if (elements.Count == 0 || elements[0].ValueKind != System.Text.Json.JsonValueKind.Array)
+                    {
+                        return Task.FromResult(new JsonArrayResult(JsonResultStatus.WrongType));
+                    }
+
+                    var len = elements[0].GetArrayLength();
+                    return Task.FromResult(new JsonArrayResult(JsonResultStatus.Ok, count: len));
+                }
+                else
+                {
+                    var lengths = new List<long>();
+                    foreach (var path in paths)
+                    {
+                        var elements = wrapper.GetAtPaths(path);
+                        if (elements.Count == 0)
+                        {
+                            lengths.Add(0);
+                        }
+                        else if (elements[0].ValueKind != System.Text.Json.JsonValueKind.Array)
+                        {
+                            return Task.FromResult(new JsonArrayResult(JsonResultStatus.WrongType));
+                        }
+                        else
+                        {
+                            lengths.Add(elements[0].GetArrayLength());
+                        }
+                    }
+
+                    return Task.FromResult(new JsonArrayResult(JsonResultStatus.Ok, counts: lengths.ToArray()));
+                }
+            }
+            catch
+            {
+                return Task.FromResult(new JsonArrayResult(JsonResultStatus.InvalidJson));
+            }
+        }
+
+        /// <summary>
+        /// Appends value(s) to arrays at the specified path(s).
+        /// </summary>
+        public Task<JsonArrayResult> JsonArrappendAsync(
+            string key,
+            string path,
+            byte[][] values,
+            CancellationToken token = default)
+        {
+            return Task.FromResult(new JsonArrayResult(JsonResultStatus.InvalidPath));
+        }
+
+        /// <summary>
+        /// Gets values from an array at the specified path(s).
+        /// </summary>
+        public Task<JsonGetResult> JsonArrindexAsync(
+            string key,
+            string path,
+            byte[] value,
+            CancellationToken token = default)
+        {
+            return Task.FromResult(new JsonGetResult(JsonResultStatus.InvalidPath));
+        }
+
+        /// <summary>
+        /// Inserts value(s) at an index in arrays.
+        /// </summary>
+        public Task<JsonArrayResult> JsonArrinsertAsync(
+            string key,
+            string path,
+            int index,
+            byte[][] values,
+            CancellationToken token = default)
+        {
+            return Task.FromResult(new JsonArrayResult(JsonResultStatus.InvalidPath));
+        }
+
+        /// <summary>
+        /// Removes elements from arrays.
+        /// </summary>
+        public Task<JsonArrayResult> JsonArrremAsync(
+            string key,
+            string path,
+            int? index,
+            CancellationToken token = default)
+        {
+            return Task.FromResult(new JsonArrayResult(JsonResultStatus.InvalidPath));
+        }
+
+        /// <summary>
+        /// Trims arrays to a range.
+        /// </summary>
+        public Task<JsonArrayResult> JsonArrtrimAsync(
+            string key,
+            string path,
+            int start,
+            int stop,
+            CancellationToken token = default)
+        {
+            return Task.FromResult(new JsonArrayResult(JsonResultStatus.InvalidPath));
+        }
+
+        /// <summary>
+        /// Gets multiple JSON documents by key.
+        /// </summary>
+        public Task<JsonMGetResult> JsonMgetAsync(
+            string[] keys,
+            string path,
+            CancellationToken token = default)
+        {
+            try
+            {
+                var values = new List<byte[]>();
+
+                foreach (var key in keys)
+                {
+                    if (_data.TryGetValue(key, out var docBytes))
+                    {
+                        var wrapper = JsonWrapper.TryParse(docBytes);
+                        if (wrapper != null)
+                        {
+                            var elements = wrapper.GetAtPaths(path);
+                            if (elements.Count > 0)
+                            {
+                                values.Add(System.Text.Encoding.UTF8.GetBytes(elements[0].GetRawText()));
+                            }
+                        }
+                    }
+                }
+
+                return Task.FromResult(new JsonMGetResult(JsonResultStatus.Ok, values.ToArray()));
+            }
+            catch
+            {
+                return Task.FromResult(new JsonMGetResult(JsonResultStatus.InvalidJson));
+            }
+        }
+
+        /// <summary>
         /// Adds a stream entry and returns its id.
         /// </summary>
         public Task<string?> StreamAddAsync(
