@@ -325,6 +325,26 @@ namespace Dredis
                     await HandleSortedSetRangeByScoreAsync(ctx, elements);
                     break;
 
+                case "ZINCRBY":
+                    await HandleSortedSetIncrementAsync(ctx, elements);
+                    break;
+
+                case "ZCOUNT":
+                    await HandleSortedSetCountByScoreAsync(ctx, elements);
+                    break;
+
+                case "ZRANK":
+                    await HandleSortedSetRankAsync(ctx, elements);
+                    break;
+
+                case "ZREVRANK":
+                    await HandleSortedSetReverseRankAsync(ctx, elements);
+                    break;
+
+                case "ZREMRANGEBYSCORE":
+                    await HandleSortedSetRemoveRangeByScoreAsync(ctx, elements);
+                    break;
+
                 case "PUBLISH":
                     await HandlePublishAsync(ctx, elements);
                     break;
@@ -1336,6 +1356,198 @@ namespace Dredis
             }
 
             WriteArray(ctx, withScoreChildren);
+        }
+
+        private async Task HandleSortedSetIncrementAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 4)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'zincrby' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            if (!TryGetString(args[2], out var incrementStr) || !double.TryParse(incrementStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var increment))
+            {
+                WriteError(ctx, "ERR value is not a valid float");
+                return;
+            }
+
+            if (!TryGetBytes(args[3], out var member))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var result = await _store.SortedSetIncrementAsync(key, increment, member).ConfigureAwait(false);
+            if (result.Status == SortedSetResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            WriteBulkString(ctx, Utf8.GetBytes(result.Score!.Value.ToString("G17", CultureInfo.InvariantCulture)));
+        }
+
+        private async Task HandleSortedSetCountByScoreAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 4)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'zcount' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            if (!TryGetString(args[2], out var minScoreStr) || !double.TryParse(minScoreStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var minScore))
+            {
+                WriteError(ctx, "ERR min or max is not a float");
+                return;
+            }
+
+            if (!TryGetString(args[3], out var maxScoreStr) || !double.TryParse(maxScoreStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var maxScore))
+            {
+                WriteError(ctx, "ERR min or max is not a float");
+                return;
+            }
+
+            var result = await _store.SortedSetCountByScoreAsync(key, minScore, maxScore).ConfigureAwait(false);
+            if (result.Status == SortedSetResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            WriteInteger(ctx, result.Count);
+        }
+
+        private async Task HandleSortedSetRankAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'zrank' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            if (!TryGetBytes(args[2], out var member))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var result = await _store.SortedSetRankAsync(key, member).ConfigureAwait(false);
+            if (result.Status == SortedSetResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            if (result.Rank is null)
+            {
+                WriteNullBulkString(ctx);
+            }
+            else
+            {
+                WriteInteger(ctx, result.Rank.Value);
+            }
+        }
+
+        private async Task HandleSortedSetReverseRankAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'zrevrank' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            if (!TryGetBytes(args[2], out var member))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var result = await _store.SortedSetReverseRankAsync(key, member).ConfigureAwait(false);
+            if (result.Status == SortedSetResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            if (result.Rank is null)
+            {
+                WriteNullBulkString(ctx);
+            }
+            else
+            {
+                WriteInteger(ctx, result.Rank.Value);
+            }
+        }
+
+        private async Task HandleSortedSetRemoveRangeByScoreAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 4)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'zremrangebyscore' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            if (!TryGetString(args[2], out var minScoreStr) || !double.TryParse(minScoreStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var minScore))
+            {
+                WriteError(ctx, "ERR min or max is not a float");
+                return;
+            }
+
+            if (!TryGetString(args[3], out var maxScoreStr) || !double.TryParse(maxScoreStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var maxScore))
+            {
+                WriteError(ctx, "ERR min or max is not a float");
+                return;
+            }
+
+            var result = await _store.SortedSetRemoveRangeByScoreAsync(key, minScore, maxScore).ConfigureAwait(false);
+            if (result.Status == SortedSetResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            WriteInteger(ctx, result.Removed);
         }
 
         private async Task HandlePublishAsync(

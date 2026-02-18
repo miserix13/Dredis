@@ -1168,6 +1168,239 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        public async Task SortedSet_ZIncrBy_IncrementsScore()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("ZADD", "zset", "1", "member1"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("ZINCRBY", "zset", "2.5", "member1"));
+                channel.RunPendingTasks();
+                var response = ReadOutbound(channel);
+                var bulk = Assert.IsType<FullBulkStringRedisMessage>(response);
+                Assert.Equal("3.5", GetBulkString(bulk));
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task SortedSet_ZIncrBy_NonExistentMember_InitializesScore()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("ZINCRBY", "zset", "5", "member1"));
+                channel.RunPendingTasks();
+                var response = ReadOutbound(channel);
+                var bulk = Assert.IsType<FullBulkStringRedisMessage>(response);
+                Assert.Equal("5", GetBulkString(bulk));
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task SortedSet_ZCount_CountsMembersInRange()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("ZADD", "zset", "1", "one", "2", "two", "3", "three", "4", "four"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("ZCOUNT", "zset", "2", "3"));
+                channel.RunPendingTasks();
+                var response = ReadOutbound(channel);
+                var integer = Assert.IsType<IntegerRedisMessage>(response);
+                Assert.Equal(2, integer.Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task SortedSet_ZCount_NonExistentKey_ReturnsZero()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("ZCOUNT", "nonexistent", "1", "10"));
+                channel.RunPendingTasks();
+                var response = ReadOutbound(channel);
+                var integer = Assert.IsType<IntegerRedisMessage>(response);
+                Assert.Equal(0, integer.Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task SortedSet_ZRank_ReturnsRankAscending()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("ZADD", "zset", "1", "one", "2", "two", "3", "three"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("ZRANK", "zset", "two"));
+                channel.RunPendingTasks();
+                var response = ReadOutbound(channel);
+                var integer = Assert.IsType<IntegerRedisMessage>(response);
+                Assert.Equal(1, integer.Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task SortedSet_ZRank_NonExistentMember_ReturnsNull()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("ZADD", "zset", "1", "one"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("ZRANK", "zset", "nonexistent"));
+                channel.RunPendingTasks();
+                var response = ReadOutbound(channel);
+                Assert.Same(FullBulkStringRedisMessage.Null, response);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task SortedSet_ZRevRank_ReturnsRankDescending()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("ZADD", "zset", "1", "one", "2", "two", "3", "three"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("ZREVRANK", "zset", "two"));
+                channel.RunPendingTasks();
+                var response = ReadOutbound(channel);
+                var integer = Assert.IsType<IntegerRedisMessage>(response);
+                Assert.Equal(1, integer.Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task SortedSet_ZRevRank_NonExistentMember_ReturnsNull()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("ZADD", "zset", "1", "one"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("ZREVRANK", "zset", "nonexistent"));
+                channel.RunPendingTasks();
+                var response = ReadOutbound(channel);
+                Assert.Same(FullBulkStringRedisMessage.Null, response);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task SortedSet_ZRemRangeByScore_RemovesAndReturnsCount()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("ZADD", "zset", "1", "one", "2", "two", "3", "three", "4", "four"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("ZREMRANGEBYSCORE", "zset", "2", "3"));
+                channel.RunPendingTasks();
+                var response = ReadOutbound(channel);
+                var integer = Assert.IsType<IntegerRedisMessage>(response);
+                Assert.Equal(2, integer.Value);
+
+                // Verify they were actually removed
+                channel.WriteInbound(Command("ZCOUNT", "zset", "0", "10"));
+                channel.RunPendingTasks();
+                var countResponse = ReadOutbound(channel);
+                var count = Assert.IsType<IntegerRedisMessage>(countResponse);
+                Assert.Equal(2, count.Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task SortedSet_ZRemRangeByScore_NonExistentKey_ReturnsZero()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("ZREMRANGEBYSCORE", "nonexistent", "1", "10"));
+                channel.RunPendingTasks();
+                var response = ReadOutbound(channel);
+                var integer = Assert.IsType<IntegerRedisMessage>(response);
+                Assert.Equal(0, integer.Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
         public async Task Publish_NoSubscribers_ReturnsZero()
         {
             DredisCommandHandler.PubSubManager.Clear();
@@ -4640,6 +4873,148 @@ namespace Dredis.Tests
             }
 
             return Task.FromResult(new SortedSetScoreResult(SortedSetResultStatus.Ok, null));
+        }
+
+        public Task<SortedSetScoreResult> SortedSetIncrementAsync(string key, double increment, byte[] member, CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _sets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            {
+                return Task.FromResult(new SortedSetScoreResult(SortedSetResultStatus.WrongType, null));
+            }
+
+            if (!_sortedSets.TryGetValue(key, out var set))
+            {
+                set = new Dictionary<string, SortedSetMember>();
+                _sortedSets[key] = set;
+            }
+
+            var memberKey = Convert.ToBase64String(member);
+            double newScore;
+            if (set.TryGetValue(memberKey, out var member_data))
+            {
+                newScore = member_data.Score + increment;
+                set[memberKey] = new SortedSetMember(memberKey, member, newScore);
+            }
+            else
+            {
+                newScore = increment;
+                set[memberKey] = new SortedSetMember(memberKey, member, newScore);
+            }
+
+            return Task.FromResult(new SortedSetScoreResult(SortedSetResultStatus.Ok, newScore));
+        }
+
+        public Task<SortedSetCountResult> SortedSetCountByScoreAsync(string key, double minScore, double maxScore, CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _sets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            {
+                return Task.FromResult(new SortedSetCountResult(SortedSetResultStatus.WrongType, 0));
+            }
+
+            if (!_sortedSets.TryGetValue(key, out var set))
+            {
+                return Task.FromResult(new SortedSetCountResult(SortedSetResultStatus.Ok, 0));
+            }
+
+            var count = set.Values.Count(m => m.Score >= minScore && m.Score <= maxScore);
+            return Task.FromResult(new SortedSetCountResult(SortedSetResultStatus.Ok, count));
+        }
+
+        public Task<SortedSetRankResult> SortedSetRankAsync(string key, byte[] member, CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _sets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            {
+                return Task.FromResult(new SortedSetRankResult(SortedSetResultStatus.WrongType, null));
+            }
+
+            if (!_sortedSets.TryGetValue(key, out var set))
+            {
+                return Task.FromResult(new SortedSetRankResult(SortedSetResultStatus.Ok, null));
+            }
+
+            var memberKey = Convert.ToBase64String(member);
+            if (!set.ContainsKey(memberKey))
+            {
+                return Task.FromResult(new SortedSetRankResult(SortedSetResultStatus.Ok, null));
+            }
+
+            var ordered = set.OrderBy(m => m.Value.Score).ThenBy(m => m.Key).ToList();
+            var rank = ordered.FindIndex(m => m.Key == memberKey);
+            return Task.FromResult(new SortedSetRankResult(SortedSetResultStatus.Ok, (long)rank));
+        }
+
+        public Task<SortedSetRankResult> SortedSetReverseRankAsync(string key, byte[] member, CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _sets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            {
+                return Task.FromResult(new SortedSetRankResult(SortedSetResultStatus.WrongType, null));
+            }
+
+            if (!_sortedSets.TryGetValue(key, out var set))
+            {
+                return Task.FromResult(new SortedSetRankResult(SortedSetResultStatus.Ok, null));
+            }
+
+            var memberKey = Convert.ToBase64String(member);
+            if (!set.ContainsKey(memberKey))
+            {
+                return Task.FromResult(new SortedSetRankResult(SortedSetResultStatus.Ok, null));
+            }
+
+            var ordered = set.OrderByDescending(m => m.Value.Score).ThenBy(m => m.Key).ToList();
+            var rank = ordered.FindIndex(m => m.Key == memberKey);
+            return Task.FromResult(new SortedSetRankResult(SortedSetResultStatus.Ok, (long)rank));
+        }
+
+        public Task<SortedSetRemoveRangeResult> SortedSetRemoveRangeByScoreAsync(string key, double minScore, double maxScore, CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _sets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            {
+                return Task.FromResult(new SortedSetRemoveRangeResult(SortedSetResultStatus.WrongType, 0));
+            }
+
+            if (!_sortedSets.TryGetValue(key, out var set))
+            {
+                return Task.FromResult(new SortedSetRemoveRangeResult(SortedSetResultStatus.Ok, 0));
+            }
+
+            var toRemove = set.Where(m => m.Value.Score >= minScore && m.Value.Score <= maxScore).Select(m => m.Key).ToList();
+            foreach (var memberKey in toRemove)
+            {
+                set.Remove(memberKey);
+            }
+
+            if (set.Count == 0)
+            {
+                _sortedSets.Remove(key);
+            }
+
+            return Task.FromResult(new SortedSetRemoveRangeResult(SortedSetResultStatus.Ok, toRemove.Count));
         }
 
         /// <summary>

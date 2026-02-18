@@ -407,6 +407,54 @@ namespace Dredis.Abstractions.Storage
     }
 
     /// <summary>
+    /// Represents a sorted set rank result.
+    /// </summary>
+    public sealed class SortedSetRankResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="SortedSetRankResult"/> class.
+        /// </summary>
+        public SortedSetRankResult(SortedSetResultStatus status, long? rank)
+        {
+            Status = status;
+            Rank = rank;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public SortedSetResultStatus Status { get; }
+        /// <summary>
+        /// Gets the rank (0-based position), or null if member does not exist.
+        /// </summary>
+        public long? Rank { get; }
+    }
+
+    /// <summary>
+    /// Represents a sorted set remove range result.
+    /// </summary>
+    public sealed class SortedSetRemoveRangeResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="SortedSetRemoveRangeResult"/> class.
+        /// </summary>
+        public SortedSetRemoveRangeResult(SortedSetResultStatus status, long removed)
+        {
+            Status = status;
+            Removed = removed;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public SortedSetResultStatus Status { get; }
+        /// <summary>
+        /// Gets the number of elements removed.
+        /// </summary>
+        public long Removed { get; }
+    }
+
+    /// <summary>
     /// Describes results of setting a stream's last id.
     /// </summary>
     public enum StreamSetIdResultStatus
@@ -1258,6 +1306,72 @@ namespace Dredis.Abstractions.Storage
         Task<SortedSetScoreResult> SortedSetScoreAsync(
             string key,
             byte[] member,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Increments the score of a member in a sorted set.
+        /// </summary>
+        /// <param name="key">The sorted set key.</param>
+        /// <param name="increment">The value to add to the score.</param>
+        /// <param name="member">The member.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the new score.</returns>
+        Task<SortedSetScoreResult> SortedSetIncrementAsync(
+            string key,
+            double increment,
+            byte[] member,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Counts members in a sorted set within a score range.
+        /// </summary>
+        /// <param name="key">The sorted set key.</param>
+        /// <param name="minScore">Minimum score (inclusive).</param>
+        /// <param name="maxScore">Maximum score (inclusive).</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the count.</returns>
+        Task<SortedSetCountResult> SortedSetCountByScoreAsync(
+            string key,
+            double minScore,
+            double maxScore,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Returns the rank of a member in a sorted set (ascending order, 0-based).
+        /// </summary>
+        /// <param name="key">The sorted set key.</param>
+        /// <param name="member">The member.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the rank.</returns>
+        Task<SortedSetRankResult> SortedSetRankAsync(
+            string key,
+            byte[] member,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Returns the rank of a member in a sorted set (descending order, 0-based).
+        /// </summary>
+        /// <param name="key">The sorted set key.</param>
+        /// <param name="member">The member.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the rank.</returns>
+        Task<SortedSetRankResult> SortedSetReverseRankAsync(
+            string key,
+            byte[] member,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Removes members from a sorted set within a score range.
+        /// </summary>
+        /// <param name="key">The sorted set key.</param>
+        /// <param name="minScore">Minimum score (inclusive).</param>
+        /// <param name="maxScore">Maximum score (inclusive).</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the count removed.</returns>
+        Task<SortedSetRemoveRangeResult> SortedSetRemoveRangeByScoreAsync(
+            string key,
+            double minScore,
+            double maxScore,
             CancellationToken token = default);
 
         /// <summary>
