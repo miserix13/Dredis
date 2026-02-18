@@ -9,7 +9,44 @@ namespace Dredis
 {
     /// <summary>
     /// JSON command handlers for Dredis.
+    /// Implements RedisJSON-compatible commands for storing and manipulating JSON documents.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This partial class extends <see cref="DredisCommandHandler"/> with JSON document support.
+    /// All commands use JSONPath syntax for navigating and manipulating JSON structures.
+    /// </para>
+    /// <para>
+    /// Supported commands:
+    /// <list type="bullet">
+    /// <item><description><c>JSON.SET key path value</c> - Sets JSON value at the specified path</description></item>
+    /// <item><description><c>JSON.GET key [path ...]</c> - Gets JSON values from one or more paths (defaults to root "$")</description></item>
+    /// <item><description><c>JSON.DEL key [path ...]</c> - Deletes JSON values at specified paths</description></item>
+    /// <item><description><c>JSON.TYPE key [path ...]</c> - Returns JSON type(s) at specified path(s)</description></item>
+    /// <item><description><c>JSON.STRLEN key [path ...]</c> - Returns string length(s) at specified path(s)</description></item>
+    /// <item><description><c>JSON.ARRLEN key [path ...]</c> - Returns array length(s) at specified path(s)</description></item>
+    /// <item><description><c>JSON.ARRAPPEND key path value [value ...]</c> - Appends values to array at path</description></item>
+    /// <item><description><c>JSON.ARRINDEX key path value</c> - Returns index of value in array, or -1 if not found</description></item>
+    /// <item><description><c>JSON.ARRINSERT key path index value [value ...]</c> - Inserts values at index in array</description></item>
+    /// <item><description><c>JSON.ARRREM key path [index]</c> - Removes element at index (or last element if no index)</description></item>
+    /// <item><description><c>JSON.ARRTRIM key path start stop</c> - Trims array to specified range</description></item>
+    /// <item><description><c>JSON.MGET key [key ...] path</c> - Gets JSON values from multiple keys at specified path</description></item>
+    /// </list>
+    /// </para>
+    /// <para>
+    /// JSONPath syntax supports standard path expressions:
+    /// <list type="bullet">
+    /// <item><description><c>$</c> - Root element</description></item>
+    /// <item><description><c>$.property</c> - Object property access</description></item>
+    /// <item><description><c>$[0]</c> - Array index access</description></item>
+    /// <item><description><c>$.users[0].name</c> - Nested path traversal</description></item>
+    /// </list>
+    /// </para>
+    /// <para>
+    /// JSON types returned by JSON.TYPE:
+    /// <c>object</c>, <c>array</c>, <c>string</c>, <c>number</c>, <c>boolean</c>, <c>null</c>
+    /// </para>
+    /// </remarks>
     public partial class DredisCommandHandler
     {
         /// <summary>

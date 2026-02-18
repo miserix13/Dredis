@@ -7,13 +7,49 @@ namespace Dredis.Abstractions.Storage
     /// <summary>
     /// Describes results of JSON operations.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// These status codes are returned by JSON operations to indicate success or various error conditions:
+    /// <list type="bullet">
+    /// <item><description><see cref="Ok"/> - Operation completed successfully</description></item>
+    /// <item><description><see cref="WrongType"/> - Key exists but contains a non-JSON value</description></item>
+    /// <item><description><see cref="PathNotFound"/> - Specified JSONPath does not exist in the document</description></item>
+    /// <item><description><see cref="InvalidPath"/> - JSONPath syntax is malformed</description></item>
+    /// <item><description><see cref="InvalidJson"/> - Provided JSON data is malformed and cannot be parsed</description></item>
+    /// <item><description><see cref="PathExists"/> - Path already exists (for operations requiring non-existent paths)</description></item>
+    /// </list>
+    /// </para>
+    /// </remarks>
     public enum JsonResultStatus
     {
+        /// <summary>
+        /// Operation completed successfully.
+        /// </summary>
         Ok,
+        
+        /// <summary>
+        /// Key exists but is not a JSON document type.
+        /// </summary>
         WrongType,
+        
+        /// <summary>
+        /// The specified JSONPath does not exist in the document.
+        /// </summary>
         PathNotFound,
+        
+        /// <summary>
+        /// The JSONPath syntax is invalid.
+        /// </summary>
         InvalidPath,
+        
+        /// <summary>
+        /// The JSON data is malformed and cannot be parsed.
+        /// </summary>
         InvalidJson,
+        
+        /// <summary>
+        /// The path already exists (for operations requiring non-existent paths).
+        /// </summary>
         PathExists
     }
 
