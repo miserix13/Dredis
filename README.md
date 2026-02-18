@@ -16,7 +16,7 @@ Currently implemented RESP commands and behavior:
 - Sets: `SADD`, `SREM`, `SMEMBERS`, `SCARD`
 - Sorted sets: `ZADD`, `ZREM`, `ZRANGE`, `ZCARD`, `ZSCORE`, `ZRANGEBYSCORE`, `ZINCRBY`, `ZCOUNT`, `ZRANK`, `ZREVRANK`, `ZREMRANGEBYSCORE`
 - Streams: `XADD`, `XDEL`, `XLEN`, `XTRIM`, `XRANGE`, `XREVRANGE`, `XREAD`, `XINFO`, `XSETID`, `XGROUP CREATE`, `XGROUP DESTROY`, `XGROUP SETID`, `XGROUP DELCONSUMER`, `XREADGROUP`, `XACK`, `XPENDING`, `XCLAIM`
-- Pub/Sub: `PUBLISH`, `SUBSCRIBE`
+- Pub/Sub: `PUBLISH`, `SUBSCRIBE`, `UNSUBSCRIBE`, `PSUBSCRIBE`, `PUNSUBSCRIBE`
 
 Notes:
 
@@ -31,6 +31,10 @@ Notes:
 - Consumer groups track pending entries with delivery count, idle time, and consumer ownership.
 - `PUBLISH` returns the number of clients that received the message.
 - `SUBSCRIBE` sends subscription confirmations and receives published messages via push messages.
+- `UNSUBSCRIBE` with no arguments unsubscribes from all channels.
+- `PSUBSCRIBE` supports glob-style patterns (`*`, `?`, `[abc]`) for channel matching.
+- `PUNSUBSCRIBE` with no arguments unsubscribes from all patterns.
+- Pattern subscriptions receive `pmessage` responses with pattern, channel, and message.
 
 ## Feature matrix
 
@@ -47,10 +51,9 @@ Notes:
 | Sorted sets | Yes | `ZADD`, `ZREM`, `ZRANGE`, `ZCARD`, `ZSCORE`, `ZRANGEBYSCORE`, `ZINCRBY`, `ZCOUNT`, `ZRANK`, `ZREVRANK`, `ZREMRANGEBYSCORE` |
 | Streams | Yes | `XADD`, `XDEL`, `XLEN`, `XTRIM`, `XRANGE`, `XREVRANGE`, `XREAD`, `XINFO`, `XSETID` |
 | Consumer groups | Yes | `XGROUP CREATE/DESTROY/SETID/DELCONSUMER`, `XREADGROUP`, `XACK`, `XPENDING`, `XCLAIM` |
-| Pub/Sub | Yes | `PUBLISH`, `SUBSCRIBE` |
+| Pub/Sub | Yes | `PUBLISH`, `SUBSCRIBE`, `UNSUBSCRIBE`, `PSUBSCRIBE`, `PUNSUBSCRIBE` |
 | Transactions | No | Planned |
 
 ## Short roadmap
 
-- Additional sorted set commands: `ZINCRBY`, `ZCOUNT`, `ZRANK`, `ZREVRANK`, `ZREMRANGEBYSCORE`
-- 
+- Transaction support: `MULTI`, `EXEC`, `DISCARD`, `WATCH`, `UNWATCH`

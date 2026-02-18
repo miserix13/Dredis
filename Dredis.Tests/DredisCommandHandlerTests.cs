@@ -1515,6 +1515,304 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        public async Task Unsubscribe_FromSpecificChannels()
+        {
+            DredisCommandHandler.PubSubManager.Clear();
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                // Subscribe to channels
+                channel.WriteInbound(Command("SUBSCRIBE", "channel1", "channel2", "channel3"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel); // subscription confirmation for channel1
+                _ = ReadOutbound(channel); // subscription confirmation for channel2
+                _ = ReadOutbound(channel); // subscription confirmation for channel3
+
+                // Unsubscribe from channel1 and channel2
+                channel.WriteInbound(Command("UNSUBSCRIBE", "channel1", "channel2"));
+                channel.RunPendingTasks();
+
+                // First unsubscribe confirmation
+                var response1 = ReadOutbound(channel);
+                var array1 = Assert.IsType<ArrayRedisMessage>(response1);
+                Assert.Equal(3, array1.Children.Count);
+
+                var type1 = Assert.IsType<FullBulkStringRedisMessage>(array1.Children[0]);
+                AssertBulkStringEqual(type1, "unsubscribe");
+
+                var channel_name1 = Assert.IsType<FullBulkStringRedisMessage>(array1.Children[1]);
+                AssertBulkStringEqual(channel_name1, "channel1");
+
+                var count1 = Assert.IsType<IntegerRedisMessage>(array1.Children[2]);
+                Assert.Equal(2, count1.Value); // 2 channels remaining
+
+                // Second unsubscribe confirmation
+                var response2 = ReadOutbound(channel);
+                var array2 = Assert.IsType<ArrayRedisMessage>(response2);
+                Assert.Equal(3, array2.Children.Count);
+
+                var type2 = Assert.IsType<FullBulkStringRedisMessage>(array2.Children[0]);
+                AssertBulkStringEqual(type2, "unsubscribe");
+
+                var channel_name2 = Assert.IsType<FullBulkStringRedisMessage>(array2.Children[1]);
+                AssertBulkStringEqual(channel_name2, "channel2");
+
+                var count2 = Assert.IsType<IntegerRedisMessage>(array2.Children[2]);
+                Assert.Equal(1, count2.Value); // 1 channel remaining
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task Unsubscribe_FromAllChannels()
+        {
+            DredisCommandHandler.PubSubManager.Clear();
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                // Subscribe to channels
+                channel.WriteInbound(Command("SUBSCRIBE", "channel1", "channel2"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+                _ = ReadOutbound(channel);
+
+                // Unsubscribe from all (no arguments)
+                channel.WriteInbound(Command("UNSUBSCRIBE"));
+                channel.RunPendingTasks();
+
+                // Should receive two unsubscribe confirmations
+                var response1 = ReadOutbound(channel);
+                var array1 = Assert.IsType<ArrayRedisMessage>(response1);
+                var type1 = Assert.IsType<FullBulkStringRedisMessage>(array1.Children[0]);
+                AssertBulkStringEqual(type1, "unsubscribe");
+
+                var response2 = ReadOutbound(channel);
+                var array2 = Assert.IsType<ArrayRedisMessage>(response2);
+                var type2 = Assert.IsType<FullBulkStringRedisMessage>(array2.Children[0]);
+                AssertBulkStringEqual(type2, "unsubscribe");
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task PSubscribe_SendsSubscriptionConfirmation()
+        {
+            DredisCommandHandler.PubSubManager.Clear();
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("PSUBSCRIBE", "news.*", "events.*"));
+                channel.RunPendingTasks();
+
+                // First subscription confirmation
+                var response1 = ReadOutbound(channel);
+                var array1 = Assert.IsType<ArrayRedisMessage>(response1);
+                Assert.Equal(3, array1.Children.Count);
+
+                var type1 = Assert.IsType<FullBulkStringRedisMessage>(array1.Children[0]);
+                AssertBulkStringEqual(type1, "psubscribe");
+
+                var pattern1 = Assert.IsType<FullBulkStringRedisMessage>(array1.Children[1]);
+                AssertBulkStringEqual(pattern1, "news.*");
+
+                var count1 = Assert.IsType<IntegerRedisMessage>(array1.Children[2]);
+                Assert.Equal(1, count1.Value);
+
+                // Second subscription confirmation
+                var response2 = ReadOutbound(channel);
+                var array2 = Assert.IsType<ArrayRedisMessage>(response2);
+                Assert.Equal(3, array2.Children.Count);
+
+                var type2 = Assert.IsType<FullBulkStringRedisMessage>(array2.Children[0]);
+                AssertBulkStringEqual(type2, "psubscribe");
+
+                var pattern2 = Assert.IsType<FullBulkStringRedisMessage>(array2.Children[1]);
+                AssertBulkStringEqual(pattern2, "events.*");
+
+                var count2 = Assert.IsType<IntegerRedisMessage>(array2.Children[2]);
+                Assert.Equal(2, count2.Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task Publish_WithPatternSubscriber_DeliversPMessage()
+        {
+            DredisCommandHandler.PubSubManager.Clear();
+            var store = new InMemoryKeyValueStore();
+            var publisher = new EmbeddedChannel(new DredisCommandHandler(store));
+            var subscriber = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                // Subscriber subscribes to pattern
+                subscriber.WriteInbound(Command("PSUBSCRIBE", "news.*"));
+                subscriber.RunPendingTasks();
+                _ = ReadOutbound(subscriber); // subscription confirmation
+
+                // Publisher publishes to matching channel
+                publisher.WriteInbound(Command("PUBLISH", "news.sports", "breaking news"));
+                publisher.RunPendingTasks();
+                _ = ReadOutbound(publisher); // subscriber count
+
+                // Subscriber receives pmessage
+                var messageResponse = ReadOutbound(subscriber);
+                var messageArray = Assert.IsType<ArrayRedisMessage>(messageResponse);
+                Assert.Equal(4, messageArray.Children.Count);
+
+                var messageType = Assert.IsType<FullBulkStringRedisMessage>(messageArray.Children[0]);
+                AssertBulkStringEqual(messageType, "pmessage");
+
+                var pattern = Assert.IsType<FullBulkStringRedisMessage>(messageArray.Children[1]);
+                AssertBulkStringEqual(pattern, "news.*");
+
+                var channelName = Assert.IsType<FullBulkStringRedisMessage>(messageArray.Children[2]);
+                AssertBulkStringEqual(channelName, "news.sports");
+
+                var messageData = Assert.IsType<FullBulkStringRedisMessage>(messageArray.Children[3]);
+                AssertBulkStringEqual(messageData, "breaking news");
+            }
+            finally
+            {
+                await publisher.CloseAsync();
+                await subscriber.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task PUnsubscribe_FromSpecificPatterns()
+        {
+            DredisCommandHandler.PubSubManager.Clear();
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                // Subscribe to patterns
+                channel.WriteInbound(Command("PSUBSCRIBE", "news.*", "events.*", "alerts.*"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+                _ = ReadOutbound(channel);
+                _ = ReadOutbound(channel);
+
+                // Unsubscribe from specific patterns
+                channel.WriteInbound(Command("PUNSUBSCRIBE", "news.*"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var array = Assert.IsType<ArrayRedisMessage>(response);
+                Assert.Equal(3, array.Children.Count);
+
+                var type = Assert.IsType<FullBulkStringRedisMessage>(array.Children[0]);
+                AssertBulkStringEqual(type, "punsubscribe");
+
+                var pattern = Assert.IsType<FullBulkStringRedisMessage>(array.Children[1]);
+                AssertBulkStringEqual(pattern, "news.*");
+
+                var count = Assert.IsType<IntegerRedisMessage>(array.Children[2]);
+                Assert.Equal(2, count.Value); // 2 patterns remaining
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task PUnsubscribe_FromAllPatterns()
+        {
+            DredisCommandHandler.PubSubManager.Clear();
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                // Subscribe to patterns
+                channel.WriteInbound(Command("PSUBSCRIBE", "news.*", "events.*"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+                _ = ReadOutbound(channel);
+
+                // Unsubscribe from all (no arguments)
+                channel.WriteInbound(Command("PUNSUBSCRIBE"));
+                channel.RunPendingTasks();
+
+                // Should receive two punsubscribe confirmations
+                var response1 = ReadOutbound(channel);
+                var array1 = Assert.IsType<ArrayRedisMessage>(response1);
+                var type1 = Assert.IsType<FullBulkStringRedisMessage>(array1.Children[0]);
+                AssertBulkStringEqual(type1, "punsubscribe");
+
+                var response2 = ReadOutbound(channel);
+                var array2 = Assert.IsType<ArrayRedisMessage>(response2);
+                var type2 = Assert.IsType<FullBulkStringRedisMessage>(array2.Children[0]);
+                AssertBulkStringEqual(type2, "punsubscribe");
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task PatternMatching_WildcardAndQuestionMark()
+        {
+            DredisCommandHandler.PubSubManager.Clear();
+            var store = new InMemoryKeyValueStore();
+            var subscriber = new EmbeddedChannel(new DredisCommandHandler(store));
+            var publisher = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                // Subscribe to pattern with ? and *
+                subscriber.WriteInbound(Command("PSUBSCRIBE", "h?llo", "h*o"));
+                subscriber.RunPendingTasks();
+                _ = ReadOutbound(subscriber);
+                _ = ReadOutbound(subscriber);
+
+                // Test ? pattern (matches single character)
+                publisher.WriteInbound(Command("PUBLISH", "hello", "msg1"));
+                publisher.RunPendingTasks();
+                _ = ReadOutbound(publisher);
+
+                var msg1 = ReadOutbound(subscriber);
+                var array1 = Assert.IsType<ArrayRedisMessage>(msg1);
+                var pattern1 = Assert.IsType<FullBulkStringRedisMessage>(array1.Children[1]);
+                AssertBulkStringEqual(pattern1, "h?llo");
+
+                // Test * pattern (matches multiple characters)
+                publisher.WriteInbound(Command("PUBLISH", "heeeeello", "msg2"));
+                publisher.RunPendingTasks();
+                _ = ReadOutbound(publisher);
+
+                var msg2 = ReadOutbound(subscriber);
+                var array2 = Assert.IsType<ArrayRedisMessage>(msg2);
+                var pattern2 = Assert.IsType<FullBulkStringRedisMessage>(array2.Children[1]);
+                AssertBulkStringEqual(pattern2, "h*o");
+            }
+            finally
+            {
+                await subscriber.CloseAsync();
+                await publisher.CloseAsync();
+            }
+        }
+
+        [Fact]
         /// <summary>
         /// Verifies XADD and XLEN return expected stream length.
         /// </summary>

@@ -14,6 +14,9 @@ namespace Dredis
     public sealed class PubSubManager
     {
         private readonly Dictionary<string, HashSet<IChannelHandlerContext>> _subscriptions = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, HashSet<IChannelHandlerContext>> _patternSubscriptions = new(StringComparer.Ordinal);
+        private readonly Dictionary<IChannelHandlerContext, HashSet<string>> _contextSubscriptions = new();
+        private readonly Dictionary<IChannelHandlerContext, HashSet<string>> _contextPatternSubscriptions = new();
         private readonly object _lock = new object();
 
         /// <summary>
@@ -32,29 +35,264 @@ namespace Dredis
                     }
 
                     subscribers.Add(ctx);
+
+                    if (!_contextSubscriptions.TryGetValue(ctx, out var ctxChannels))
+                    {
+                        ctxChannels = new HashSet<string>(StringComparer.Ordinal);
+                        _contextSubscriptions[ctx] = ctxChannels;
+                    }
+
+                    ctxChannels.Add(channel);
                 }
             }
         }
 
         /// <summary>
-        /// Unsubscribes a channel context from one or more channels.
+        /// Unsubscribes a channel context from one or more channels. If no channels specified, returns all subscribed channels.
         /// </summary>
-        public void Unsubscribe(IChannelHandlerContext ctx, params string[] channels)
+        public string[] GetChannelsToUnsubscribe(IChannelHandlerContext ctx, params string[] channels)
         {
             lock (_lock)
             {
-                foreach (var channel in channels)
+                // If no channels specified, return all channels
+                if (channels.Length == 0)
                 {
-                    if (_subscriptions.TryGetValue(channel, out var subscribers))
+                    if (_contextSubscriptions.TryGetValue(ctx, out var ctxChannels))
                     {
-                        subscribers.Remove(ctx);
-                        if (subscribers.Count == 0)
-                        {
-                            _subscriptions.Remove(channel);
-                        }
+                        return ctxChannels.ToArray();
+                    }
+                    else
+                    {
+                        return Array.Empty<string>();
+                    }
+                }
+
+                return channels;
+            }
+        }
+
+        /// <summary>
+        /// Unsubscribes a channel context from a single channel.
+        /// </summary>
+        public void UnsubscribeOne(IChannelHandlerContext ctx, string channel)
+        {
+            lock (_lock)
+            {
+                if (_subscriptions.TryGetValue(channel, out var subscribers))
+                {
+                    subscribers.Remove(ctx);
+                    if (subscribers.Count == 0)
+                    {
+                        _subscriptions.Remove(channel);
+                    }
+                }
+
+                if (_contextSubscriptions.TryGetValue(ctx, out var ctxChannels))
+                {
+                    ctxChannels.Remove(channel);
+                    if (ctxChannels.Count == 0)
+                    {
+                        _contextSubscriptions.Remove(ctx);
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// Subscribes a channel context to one or more channel patterns.
+        /// </summary>
+        public void PSubscribe(IChannelHandlerContext ctx, params string[] patterns)
+        {
+            lock (_lock)
+            {
+                foreach (var pattern in patterns)
+                {
+                    if (!_patternSubscriptions.TryGetValue(pattern, out var subscribers))
+                    {
+                        subscribers = new HashSet<IChannelHandlerContext>();
+                        _patternSubscriptions[pattern] = subscribers;
+                    }
+
+                    subscribers.Add(ctx);
+
+                    if (!_contextPatternSubscriptions.TryGetValue(ctx, out var ctxPatterns))
+                    {
+                        ctxPatterns = new HashSet<string>(StringComparer.Ordinal);
+                        _contextPatternSubscriptions[ctx] = ctxPatterns;
+                    }
+
+                    ctxPatterns.Add(pattern);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Unsubscribes a channel context from one or more channel patterns. If no patterns specified, returns all subscribed patterns.
+        /// </summary>
+        public string[] GetPatternsToUnsubscribe(IChannelHandlerContext ctx, params string[] patterns)
+        {
+            lock (_lock)
+            {
+                // If no patterns specified, return all patterns
+                if (patterns.Length == 0)
+                {
+                    if (_contextPatternSubscriptions.TryGetValue(ctx, out var ctxPatterns))
+                    {
+                        return ctxPatterns.ToArray();
+                    }
+                    else
+                    {
+                        return Array.Empty<string>();
+                    }
+                }
+
+                return patterns;
+            }
+        }
+
+        /// <summary>
+        /// Unsubscribes a channel context from a single channel pattern.
+        /// </summary>
+        public void PUnsubscribeOne(IChannelHandlerContext ctx, string pattern)
+        {
+            lock (_lock)
+            {
+                if (_patternSubscriptions.TryGetValue(pattern, out var subscribers))
+                {
+                    subscribers.Remove(ctx);
+                    if (subscribers.Count == 0)
+                    {
+                        _patternSubscriptions.Remove(pattern);
+                    }
+                }
+
+                if (_contextPatternSubscriptions.TryGetValue(ctx, out var ctxPatterns))
+                {
+                    ctxPatterns.Remove(pattern);
+                    if (ctxPatterns.Count == 0)
+                    {
+                        _contextPatternSubscriptions.Remove(ctx);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Gets the total subscription count for a context (channels + patterns).
+        /// </summary>
+        public int GetSubscriptionCount(IChannelHandlerContext ctx)
+        {
+            lock (_lock)
+            {
+                int count = 0;
+                if (_contextSubscriptions.TryGetValue(ctx, out var channels))
+                {
+                    count += channels.Count;
+                }
+                if (_contextPatternSubscriptions.TryGetValue(ctx, out var patterns))
+                {
+                    count += patterns.Count;
+                }
+                return count;
+            }
+        }
+
+        /// <summary>
+        /// Matches a channel name against a glob-style pattern.
+        /// </summary>
+        private static bool MatchPattern(string pattern, string channel)
+        {
+            int p = 0, c = 0;
+            int starIdx = -1, matchIdx = 0;
+
+            while (c < channel.Length)
+            {
+                if (p < pattern.Length && (pattern[p] == channel[c] || pattern[p] == '?'))
+                {
+                    p++;
+                    c++;
+                }
+                else if (p < pattern.Length && pattern[p] == '*')
+                {
+                    starIdx = p;
+                    matchIdx = c;
+                    p++;
+                }
+                else if (p < pattern.Length && pattern[p] == '[')
+                {
+                    p++;
+                    bool matched = false;
+                    bool negated = false;
+                    
+                    if (p < pattern.Length && pattern[p] == '^')
+                    {
+                        negated = true;
+                        p++;
+                    }
+
+                    while (p < pattern.Length && pattern[p] != ']')
+                    {
+                        if (pattern[p] == channel[c])
+                        {
+                            matched = true;
+                        }
+                        p++;
+                    }
+
+                    if (p < pattern.Length) p++; // skip ']'
+
+                    if ((matched && !negated) || (!matched && negated))
+                    {
+                        c++;
+                    }
+                    else if (starIdx != -1)
+                    {
+                        p = starIdx + 1;
+                        matchIdx++;
+                        c = matchIdx;
+                    }
+                    else
+                    {
+                        return false;
+                    }
+                }
+                else if (p < pattern.Length && pattern[p] == '\\' && p + 1 < pattern.Length)
+                {
+                    p++;
+                    if (pattern[p] == channel[c])
+                    {
+                        p++;
+                        c++;
+                    }
+                    else if (starIdx != -1)
+                    {
+                        p = starIdx + 1;
+                        matchIdx++;
+                        c = matchIdx;
+                    }
+                    else
+                    {
+                        return false;
+                    }
+                }
+                else if (starIdx != -1)
+                {
+                    p = starIdx + 1;
+                    matchIdx++;
+                    c = matchIdx;
+                }
+                else
+                {
+                    return false;
+                }
+            }
+
+            while (p < pattern.Length && pattern[p] == '*')
+            {
+                p++;
+            }
+
+            return p == pattern.Length;
         }
 
         /// <summary>
@@ -64,27 +302,53 @@ namespace Dredis
         {
             lock (_lock)
             {
-                if (!_subscriptions.TryGetValue(channel, out var subscribers))
-                {
-                    return 0;
-                }
+                var sentTo = new HashSet<IChannelHandlerContext>();
 
-                var message_array = new IRedisMessage[]
+                // Send to direct channel subscribers
+                if (_subscriptions.TryGetValue(channel, out var subscribers))
                 {
-                    new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Encoding.UTF8.GetBytes("message"))),
-                    new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Encoding.UTF8.GetBytes(channel))),
-                    new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(message))
-                };
-
-                foreach (var ctx in subscribers)
-                {
-                    if (ctx.Channel.Active)
+                    var message_array = new IRedisMessage[]
                     {
-                        ctx.WriteAndFlushAsync(new ArrayRedisMessage(message_array));
+                        new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Encoding.UTF8.GetBytes("message"))),
+                        new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Encoding.UTF8.GetBytes(channel))),
+                        new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(message))
+                    };
+
+                    foreach (var ctx in subscribers)
+                    {
+                        if (ctx.Channel.Active)
+                        {
+                            ctx.WriteAndFlushAsync(new ArrayRedisMessage(message_array));
+                            sentTo.Add(ctx);
+                        }
                     }
                 }
 
-                return subscribers.Count;
+                // Send to pattern subscribers
+                foreach (var kvp in _patternSubscriptions)
+                {
+                    if (MatchPattern(kvp.Key, channel))
+                    {
+                        var pmessage_array = new IRedisMessage[]
+                        {
+                            new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Encoding.UTF8.GetBytes("pmessage"))),
+                            new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Encoding.UTF8.GetBytes(kvp.Key))),
+                            new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Encoding.UTF8.GetBytes(channel))),
+                            new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(message))
+                        };
+
+                        foreach (var ctx in kvp.Value)
+                        {
+                            if (ctx.Channel.Active)
+                            {
+                                ctx.WriteAndFlushAsync(new ArrayRedisMessage(pmessage_array));
+                                sentTo.Add(ctx);
+                            }
+                        }
+                    }
+                }
+
+                return sentTo.Count;
             }
         }
 
@@ -107,6 +371,9 @@ namespace Dredis
             lock (_lock)
             {
                 _subscriptions.Clear();
+                _patternSubscriptions.Clear();
+                _contextSubscriptions.Clear();
+                _contextPatternSubscriptions.Clear();
             }
         }
     }
@@ -351,6 +618,18 @@ namespace Dredis
 
                 case "SUBSCRIBE":
                     await HandleSubscribeAsync(ctx, elements);
+                    break;
+
+                case "UNSUBSCRIBE":
+                    await HandleUnsubscribeAsync(ctx, elements);
+                    break;
+
+                case "PSUBSCRIBE":
+                    await HandlePSubscribeAsync(ctx, elements);
+                    break;
+
+                case "PUNSUBSCRIBE":
+                    await HandlePUnsubscribeAsync(ctx, elements);
                     break;
 
                 case "XADD":
@@ -1605,14 +1884,170 @@ namespace Dredis
                 PubSub.Subscribe(ctx, channel);
                 
                 // Send subscription confirmation: ["subscribe", channel, subscription_count]
-                // subscription_count is the number of channels this client is now subscribed to
+                // subscription_count is the total number of channels/patterns this client is now subscribed to
+                var subscriptionCount = PubSub.GetSubscriptionCount(ctx);
                 var subscriptionMsg = new IRedisMessage[]
                 {
                     new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes("subscribe"))),
                     new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(channel))),
-                    new IntegerRedisMessage(i + 1)
+                    new IntegerRedisMessage(subscriptionCount)
                 };
                 ctx.WriteAndFlushAsync(new ArrayRedisMessage(subscriptionMsg));
+            }
+
+            return Task.CompletedTask;
+        }
+
+        private Task HandleUnsubscribeAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            var channels = new List<string>();
+            
+            // If args.Count == 1, unsubscribe from all channels
+            if (args.Count == 1)
+            {
+                // Will be populated by PubSub.GetChannelsToUnsubscribe
+            }
+            else
+            {
+                for (int i = 1; i < args.Count; i++)
+                {
+                    if (!TryGetString(args[i], out var channel))
+                    {
+                        WriteError(ctx, "ERR null bulk string");
+                        return Task.CompletedTask;
+                    }
+
+                    channels.Add(channel);
+                }
+            }
+
+            // Get channels to unsubscribe
+            var channelsToUnsubscribe = PubSub.GetChannelsToUnsubscribe(ctx, channels.ToArray());
+            
+            // Unsubscribe from each channel one at a time and send confirmation
+            foreach (var channel in channelsToUnsubscribe)
+            {
+                PubSub.UnsubscribeOne(ctx, channel);
+                var subscriptionCount = PubSub.GetSubscriptionCount(ctx);
+                var unsubscriptionMsg = new IRedisMessage[]
+                {
+                    new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes("unsubscribe"))),
+                    new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(channel))),
+                    new IntegerRedisMessage(subscriptionCount)
+                };
+                ctx.WriteAndFlushAsync(new ArrayRedisMessage(unsubscriptionMsg));
+            }
+
+            // If no channels were provided and none existed, still send one response
+            if (args.Count == 1 && channelsToUnsubscribe.Length == 0)
+            {
+                var unsubscriptionMsg = new IRedisMessage[]
+                {
+                    new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes("unsubscribe"))),
+                    FullBulkStringRedisMessage.Null,
+                    new IntegerRedisMessage(0)
+                };
+                ctx.WriteAndFlushAsync(new ArrayRedisMessage(unsubscriptionMsg));
+            }
+
+            return Task.CompletedTask;
+        }
+
+        private Task HandlePSubscribeAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count < 2)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'psubscribe' command");
+                return Task.CompletedTask;
+            }
+
+            var patterns = new List<string>();
+            for (int i = 1; i < args.Count; i++)
+            {
+                if (!TryGetString(args[i], out var pattern))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return Task.CompletedTask;
+                }
+
+                patterns.Add(pattern);
+            }
+
+            // Subscribe to all patterns
+            for (int i = 0; i < patterns.Count; i++)
+            {
+                var pattern = patterns[i];
+                PubSub.PSubscribe(ctx, pattern);
+                
+                var subscriptionCount = PubSub.GetSubscriptionCount(ctx);
+                var subscriptionMsg = new IRedisMessage[]
+                {
+                    new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes("psubscribe"))),
+                    new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(pattern))),
+                    new IntegerRedisMessage(subscriptionCount)
+                };
+                ctx.WriteAndFlushAsync(new ArrayRedisMessage(subscriptionMsg));
+            }
+
+            return Task.CompletedTask;
+        }
+
+        private Task HandlePUnsubscribeAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            var patterns = new List<string>();
+            
+            // If args.Count == 1, unsubscribe from all patterns
+            if (args.Count == 1)
+            {
+                // Will be populated by PubSub.GetPatternsToUnsubscribe
+            }
+            else
+            {
+                for (int i = 1; i < args.Count; i++)
+                {
+                    if (!TryGetString(args[i], out var pattern))
+                    {
+                        WriteError(ctx, "ERR null bulk string");
+                        return Task.CompletedTask;
+                    }
+
+                    patterns.Add(pattern);
+                }
+            }
+
+            // Get patterns to unsubscribe
+            var patternsToUnsubscribe = PubSub.GetPatternsToUnsubscribe(ctx, patterns.ToArray());
+            
+            // Unsubscribe from each pattern one at a time and send confirmation
+            foreach (var pattern in patternsToUnsubscribe)
+            {
+                PubSub.PUnsubscribeOne(ctx, pattern);
+                var subscriptionCount = PubSub.GetSubscriptionCount(ctx);
+                var unsubscriptionMsg = new IRedisMessage[]
+                {
+                    new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes("punsubscribe"))),
+                    new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(pattern))),
+                    new IntegerRedisMessage(subscriptionCount)
+                };
+                ctx.WriteAndFlushAsync(new ArrayRedisMessage(unsubscriptionMsg));
+            }
+
+            // If no patterns were provided and none existed, still send one response
+            if (args.Count == 1 && patternsToUnsubscribe.Length == 0)
+            {
+                var unsubscriptionMsg = new IRedisMessage[]
+                {
+                    new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes("punsubscribe"))),
+                    FullBulkStringRedisMessage.Null,
+                    new IntegerRedisMessage(0)
+                };
+                ctx.WriteAndFlushAsync(new ArrayRedisMessage(unsubscriptionMsg));
             }
 
             return Task.CompletedTask;
