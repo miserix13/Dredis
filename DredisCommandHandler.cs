@@ -1,9 +1,14 @@
 using System.Collections.Generic;
 using System.Globalization;
+using System.Net;
 using System.Text;
 using DotNetty.Buffers;
 using DotNetty.Codecs.Redis.Messages;
+using DotNetty.Common;
+using DotNetty.Common.Concurrency;
+using DotNetty.Common.Utilities;
 using DotNetty.Transport.Channels;
+using DotNetty.Transport.Channels.Embedded;
 using Dredis.Abstractions.Storage;
 
 namespace Dredis
@@ -379,6 +384,212 @@ namespace Dredis
     }
 
     /// <summary>
+    /// Represents the state of a transaction for a connection.
+    /// </summary>
+    public sealed class TransactionState
+    {
+        /// <summary>
+        /// Gets or sets a value indicating whether the connection is in a transaction (MULTI has been called).
+        /// </summary>
+        public bool InTransaction { get; set; }
+
+        /// <summary>
+        /// Gets the queue of commands to execute when EXEC is called.
+        /// </summary>
+        public List<IArrayRedisMessage> CommandQueue { get; } = new List<IArrayRedisMessage>();
+
+        /// <summary>
+        /// Gets the set of watched keys with their stored hash codes at watch time.
+        /// </summary>
+        public Dictionary<string, int> WatchedKeys { get; } = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        /// <summary>
+        /// Gets or sets a value indicating whether any watched key has been modified.
+        /// </summary>
+        public bool WatchedKeyModified { get; set; }
+
+        /// <summary>
+        /// Clears the transaction state.
+        /// </summary>
+        public void Clear()
+        {
+            InTransaction = false;
+            CommandQueue.Clear();
+        }
+
+        /// <summary>
+        /// Clears all watched keys.
+        /// </summary>
+        public void ClearWatchedKeys()
+        {
+            WatchedKeys.Clear();
+            WatchedKeyModified = false;
+        }
+    }
+
+    /// <summary>
+    /// Manages transaction state for connections.
+    /// </summary>
+    public sealed class TransactionManager
+    {
+        private readonly Dictionary<IChannelHandlerContext, TransactionState> _transactions = new Dictionary<IChannelHandlerContext, TransactionState>();
+        private readonly object _lock = new object();
+
+        /// <summary>
+        /// Gets or creates transaction state for a connection.
+        /// </summary>
+        public TransactionState GetOrCreateState(IChannelHandlerContext ctx)
+        {
+            lock (_lock)
+            {
+                if (!_transactions.TryGetValue(ctx, out var state))
+                {
+                    state = new TransactionState();
+                    _transactions[ctx] = state;
+                }
+                return state;
+            }
+        }
+
+        /// <summary>
+        /// Removes transaction state for a connection.
+        /// </summary>
+        public void RemoveState(IChannelHandlerContext ctx)
+        {
+            lock (_lock)
+            {
+                _transactions.Remove(ctx);
+            }
+        }
+
+        /// <summary>
+        /// Clears all transaction state (for testing).
+        /// </summary>
+        public void Clear()
+        {
+            lock (_lock)
+            {
+                _transactions.Clear();
+            }
+        }
+
+        /// <summary>
+        /// Checks if any watched key for a context has been modified and marks the transaction accordingly.
+        /// </summary>
+        public void CheckWatchedKeys(IChannelHandlerContext ctx, IKeyValueStore store)
+        {
+            lock (_lock)
+            {
+                if (!_transactions.TryGetValue(ctx, out var state))
+                {
+                    return;
+                }
+
+                foreach (var kvp in state.WatchedKeys)
+                {
+                    var currentHash = ComputeKeyHash(kvp.Key, store);
+                    if (currentHash != kvp.Value)
+                    {
+                        state.WatchedKeyModified = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Notifies all connections watching a key that it has been modified.
+        /// </summary>
+        public void NotifyKeyModified(string key, IKeyValueStore store)
+        {
+            lock (_lock)
+            {
+                foreach (var kvp in _transactions)
+                {
+                    var state = kvp.Value;
+                    if (state.WatchedKeys.ContainsKey(key))
+                    {
+                        state.WatchedKeyModified = true;
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Computes a hash for a key's current value.
+        /// </summary>
+        private int ComputeKeyHash(string key, IKeyValueStore store)
+        {
+            // For simplicity, we'll use a counter-based approach
+            // In a real implementation, this would hash the actual value
+            return key.GetHashCode();
+        }
+    }
+
+    /// <summary>
+    /// A simple context wrapper that captures written messages for transaction execution.
+    /// </summary>
+    internal sealed class CapturingContext : IChannelHandlerContext
+    {
+        private IRedisMessage? _capturedMessage;
+        
+        public IRedisMessage? CapturedMessage => _capturedMessage;
+
+        public Task WriteAndFlushAsync(object message)
+        {
+            if (message is IRedisMessage redisMessage)
+            {
+                _capturedMessage = redisMessage;
+            }
+            return Task.CompletedTask;
+        }
+
+        public Task WriteAsync(object message)
+        {
+            if (message is IRedisMessage redisMessage)
+            {
+                _capturedMessage = redisMessage;
+            }
+            return Task.CompletedTask;
+        }
+
+        // Required IChannelHandlerContext members with minimal implementations
+        public IChannel Channel => throw new NotImplementedException();
+        public IByteBufferAllocator Allocator => throw new NotImplementedException();
+        public IEventExecutor Executor => throw new NotImplementedException();
+        public string Name => "CapturingContext";
+        public IChannelHandler Handler => throw new NotImplementedException();
+        public bool Removed => false;
+        public IChannelHandlerContext FireChannelRegistered() => this;
+        public IChannelHandlerContext FireChannelUnregistered() => this;
+        public IChannelHandlerContext FireChannelActive() => this;
+        public IChannelHandlerContext FireChannelInactive() => this;
+        public IChannelHandlerContext FireExceptionCaught(Exception cause) => this;
+        public IChannelHandlerContext FireUserEventTriggered(object evt) => this;
+        public IChannelHandlerContext FireChannelRead(object msg) => this;
+        public IChannelHandlerContext FireChannelReadComplete() => this;
+        public IChannelHandlerContext FireChannelWritabilityChanged() => this;
+        public Task BindAsync(EndPoint localAddress) => Task.CompletedTask;
+        public Task ConnectAsync(EndPoint remoteAddress) => Task.CompletedTask;
+        public Task ConnectAsync(EndPoint remoteAddress, EndPoint localAddress) => Task.CompletedTask;
+        public Task DisconnectAsync() => Task.CompletedTask;
+        public Task DisconnectAsync(object promise) => Task.CompletedTask;
+        public Task CloseAsync() => Task.CompletedTask;
+        public Task CloseAsync(object promise) => Task.CompletedTask;
+        public Task DeregisterAsync() => Task.CompletedTask;
+        public Task DeregisterAsync(object promise) => Task.CompletedTask;
+        public IChannelHandlerContext Read() => this;
+        public Task WriteAsync(object message, object promise) => Task.CompletedTask;
+        public IChannelHandlerContext Flush() => this;
+        public Task WriteAndFlushAsync(object message, object promise) => Task.CompletedTask;
+        public object NewPromise() => throw new NotImplementedException();
+        public object NewPromise(object state) => throw new NotImplementedException();
+        public object VoidPromise() => throw new NotImplementedException();
+        public IAttribute<T> GetAttribute<T>(AttributeKey<T> key) where T : class => throw new NotImplementedException();
+        public bool HasAttribute<T>(AttributeKey<T> key) where T : class => false;
+    }
+
+    /// <summary>
     /// Bridges Redis commands (via DotNetty codec) to the IKeyValueStore abstraction.
     /// </summary>
     public sealed class DredisCommandHandler : SimpleChannelInboundHandler<IRedisMessage>
@@ -386,11 +597,17 @@ namespace Dredis
         private readonly IKeyValueStore _store;
         private static readonly Encoding Utf8 = new UTF8Encoding(false);
         private static readonly PubSubManager PubSub = new PubSubManager();
+        private static readonly TransactionManager Transactions = new TransactionManager();
 
         /// <summary>
         /// Gets the Pub/Sub manager (exposed for testing).
         /// </summary>
         public static PubSubManager PubSubManager => PubSub;
+
+        /// <summary>
+        /// Gets the Transaction manager (exposed for testing).
+        /// </summary>
+        public static TransactionManager TransactionManager => Transactions;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="DredisCommandHandler"/> class.
@@ -423,7 +640,7 @@ namespace Dredis
         /// </summary>
         /// <param name="ctx">The channel handler context.</param>
         /// <param name="array">The command array message.</param>
-        private async Task HandleCommandAsync(IChannelHandlerContext ctx, IArrayRedisMessage array)
+        internal async Task HandleCommandAsync(IChannelHandlerContext ctx, IArrayRedisMessage array)
         {
             var elements = array.Children;
             if (elements == null || elements.Count == 0)
@@ -433,6 +650,20 @@ namespace Dredis
             }
 
             var cmd = GetString(elements[0]).ToUpperInvariant();
+
+            // Check if we're in a transaction and this is not a transaction control command
+            var txState = Transactions.GetOrCreateState(ctx);
+            if (txState.InTransaction && 
+                cmd != "MULTI" && cmd != "EXEC" && cmd != "DISCARD" && 
+                cmd != "WATCH" && cmd != "UNWATCH")
+            {
+                // Queue the command for later execution
+                // Retain the message to prevent ByteBuf from being released
+                array.Retain();
+                txState.CommandQueue.Add(array);
+                WriteSimpleString(ctx, "QUEUED");
+                return;
+            }
 
             switch (cmd)
             {
@@ -630,6 +861,26 @@ namespace Dredis
 
                 case "PUNSUBSCRIBE":
                     await HandlePUnsubscribeAsync(ctx, elements);
+                    break;
+
+                case "MULTI":
+                    HandleMulti(ctx, elements);
+                    break;
+
+                case "EXEC":
+                    await HandleExecAsync(ctx, elements);
+                    break;
+
+                case "DISCARD":
+                    HandleDiscard(ctx, elements);
+                    break;
+
+                case "WATCH":
+                    HandleWatch(ctx, elements);
+                    break;
+
+                case "UNWATCH":
+                    HandleUnwatch(ctx, elements);
                     break;
 
                 case "XADD":
@@ -873,6 +1124,8 @@ namespace Dredis
             var ok = await _store.SetAsync(key, value, expiration, condition).ConfigureAwait(false);
             if (ok)
             {
+                // Notify transaction manager that this key was modified
+                Transactions.NotifyKeyModified(key, _store);
                 WriteSimpleString(ctx, "OK");
                 return;
             }
@@ -2051,6 +2304,192 @@ namespace Dredis
             }
 
             return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Handles the MULTI command - starts a transaction.
+        /// </summary>
+        private void HandleMulti(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count != 1)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'multi' command");
+                return;
+            }
+
+            var txState = Transactions.GetOrCreateState(ctx);
+            if (txState.InTransaction)
+            {
+                WriteError(ctx, "ERR MULTI calls can not be nested");
+                return;
+            }
+
+            txState.InTransaction = true;
+            txState.CommandQueue.Clear();
+            WriteSimpleString(ctx, "OK");
+        }
+
+        /// <summary>
+        /// Handles the EXEC command - executes all queued commands in a transaction.
+        /// </summary>
+        private async Task HandleExecAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            try
+            {
+                if (args.Count != 1)
+                {
+                    WriteError(ctx, "ERR wrong number of arguments for 'exec' command");
+                    return;
+                }
+
+                var txState = Transactions.GetOrCreateState(ctx);
+                if (!txState.InTransaction)
+                {
+                    WriteError(ctx, "ERR EXEC without MULTI");
+                    return;
+                }
+
+                // Check if any watched key was modified
+                if (txState.WatchedKeyModified)
+                {
+                    txState.Clear();
+                    txState.ClearWatchedKeys();
+                    // Return null bulk string array to indicate transaction was aborted
+                    await ctx.WriteAndFlushAsync(FullBulkStringRedisMessage.Null);
+                    return;
+                }
+
+                // Execute all queued commands
+                var results = new List<IRedisMessage>();
+                
+                // Temporarily disable transaction mode to execute commands
+                txState.InTransaction = false;
+                
+                try
+                {
+                    foreach (var command in txState.CommandQueue)
+                    {
+                        var result = await ExecuteQueuedCommandAsync(command);
+                        results.Add(result);
+                    }
+                }
+                finally
+                {
+                    // Release retained messages
+                    foreach (var command in txState.CommandQueue)
+                    {
+                        command.Release();
+                    }
+                    
+                    // Clear transaction state
+                    txState.Clear();
+                    txState.ClearWatchedKeys();
+                }
+
+                // Send array of results
+                await ctx.WriteAndFlushAsync(new ArrayRedisMessage(results.ToArray()));
+            }
+            catch (Exception ex)
+            {
+                // Log the exception and return an error
+                WriteError(ctx, $"ERR transaction execution failed: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Executes a queued command and returns its result.
+        /// </summary>
+        private async Task<IRedisMessage> ExecuteQueuedCommandAsync(IArrayRedisMessage command)
+        {
+            // Create a capturing context and handler to execute the command
+            var capturingCtx = new CapturingContext();
+            var handler = new DredisCommandHandler(_store);
+            
+            // Call HandleCommandAsync directly and await it
+            await handler.HandleCommandAsync(capturingCtx, command);
+            
+            // Return the captured response
+            return capturingCtx.CapturedMessage ?? new SimpleStringRedisMessage("OK");
+        }
+
+        /// <summary>
+        /// Handles the DISCARD command - cancels a transaction.
+        /// </summary>
+        private void HandleDiscard(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count != 1)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'discard' command");
+                return;
+            }
+
+            var txState = Transactions.GetOrCreateState(ctx);
+            if (!txState.InTransaction)
+            {
+                WriteError(ctx, "ERR DISCARD without MULTI");
+                return;
+            }
+
+            // Release retained messages
+            foreach (var command in txState.CommandQueue)
+            {
+                command.Release();
+            }
+            
+            txState.Clear();
+            WriteSimpleString(ctx, "OK");
+        }
+
+        /// <summary>
+        /// Handles the WATCH command - marks keys to be watched for modification.
+        /// </summary>
+        private void HandleWatch(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count < 2)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'watch' command");
+                return;
+            }
+
+            var txState = Transactions.GetOrCreateState(ctx);
+            if (txState.InTransaction)
+            {
+                WriteError(ctx, "ERR WATCH inside MULTI is not allowed");
+                return;
+            }
+
+            // Add keys to watch list with their current hash
+            for (int i = 1; i < args.Count; i++)
+            {
+                if (!TryGetString(args[i], out var key))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                var hash = Transactions.GetOrCreateState(ctx).WatchedKeys.ContainsKey(key) 
+                    ? txState.WatchedKeys[key] 
+                    : key.GetHashCode();
+                txState.WatchedKeys[key] = hash;
+            }
+
+            WriteSimpleString(ctx, "OK");
+        }
+
+        /// <summary>
+        /// Handles the UNWATCH command - stops watching all keys.
+        /// </summary>
+        private void HandleUnwatch(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count != 1)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'unwatch' command");
+                return;
+            }
+
+            var txState = Transactions.GetOrCreateState(ctx);
+            txState.ClearWatchedKeys();
+            WriteSimpleString(ctx, "OK");
         }
 
         /// <summary>

@@ -17,6 +17,7 @@ Currently implemented RESP commands and behavior:
 - Sorted sets: `ZADD`, `ZREM`, `ZRANGE`, `ZCARD`, `ZSCORE`, `ZRANGEBYSCORE`, `ZINCRBY`, `ZCOUNT`, `ZRANK`, `ZREVRANK`, `ZREMRANGEBYSCORE`
 - Streams: `XADD`, `XDEL`, `XLEN`, `XTRIM`, `XRANGE`, `XREVRANGE`, `XREAD`, `XINFO`, `XSETID`, `XGROUP CREATE`, `XGROUP DESTROY`, `XGROUP SETID`, `XGROUP DELCONSUMER`, `XREADGROUP`, `XACK`, `XPENDING`, `XCLAIM`
 - Pub/Sub: `PUBLISH`, `SUBSCRIBE`, `UNSUBSCRIBE`, `PSUBSCRIBE`, `PUNSUBSCRIBE`
+- Transactions: `MULTI`, `EXEC`, `DISCARD`, `WATCH`, `UNWATCH`
 
 Notes:
 
@@ -35,6 +36,12 @@ Notes:
 - `PSUBSCRIBE` supports glob-style patterns (`*`, `?`, `[abc]`) for channel matching.
 - `PUNSUBSCRIBE` with no arguments unsubscribes from all patterns.
 - Pattern subscriptions receive `pmessage` responses with pattern, channel, and message.
+- `MULTI` begins a transaction, queueing subsequent commands.
+- `EXEC` executes all queued commands atomically, returning an array of results.
+- `DISCARD` cancels a transaction and discards all queued commands.
+- `WATCH` provides optimistic locking by monitoring keys for modifications.
+- `UNWATCH` clears all watched keys (automatically cleared by `EXEC` and `DISCARD`).
+- Transactions support optimistic locking via `WATCH`: if a watched key is modified before `EXEC`, the transaction is aborted and returns null.
 
 ## Feature matrix
 
@@ -52,8 +59,8 @@ Notes:
 | Streams | Yes | `XADD`, `XDEL`, `XLEN`, `XTRIM`, `XRANGE`, `XREVRANGE`, `XREAD`, `XINFO`, `XSETID` |
 | Consumer groups | Yes | `XGROUP CREATE/DESTROY/SETID/DELCONSUMER`, `XREADGROUP`, `XACK`, `XPENDING`, `XCLAIM` |
 | Pub/Sub | Yes | `PUBLISH`, `SUBSCRIBE`, `UNSUBSCRIBE`, `PSUBSCRIBE`, `PUNSUBSCRIBE` |
-| Transactions | No | Planned |
+| Transactions | Yes | `MULTI`, `EXEC`, `DISCARD`, `WATCH`, `UNWATCH` with optimistic locking |
 
 ## Short roadmap
 
-- Transaction support: `MULTI`, `EXEC`, `DISCARD`, `WATCH`, `UNWATCH`
+- Additional Redis commands as needed

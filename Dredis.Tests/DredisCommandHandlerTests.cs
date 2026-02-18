@@ -1813,6 +1813,256 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        public async Task Multi_Exec_ExecutesQueuedCommands()
+        {
+            DredisCommandHandler.TransactionManager.Clear();
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                // Start transaction
+                channel.WriteInbound(Command("MULTI"));
+                channel.RunPendingTasks();
+                var multiResponse = ReadOutbound(channel);
+                var multiStr = Assert.IsType<SimpleStringRedisMessage>(multiResponse);
+                Assert.Equal("OK", multiStr.Content);
+
+                // Queue commands
+                channel.WriteInbound(Command("SET", "key1", "value1"));
+                channel.RunPendingTasks();
+                var queued1 = ReadOutbound(channel);
+                var q1 = Assert.IsType<SimpleStringRedisMessage>(queued1);
+                Assert.Equal("QUEUED", q1.Content);
+
+                channel.WriteInbound(Command("SET", "key2", "value2"));
+                channel.RunPendingTasks();
+                var queued2 = ReadOutbound(channel);
+                var q2 = Assert.IsType<SimpleStringRedisMessage>(queued2);
+                Assert.Equal("QUEUED", q2.Content);
+
+                channel.WriteInbound(Command("GET", "key1"));
+                channel.RunPendingTasks();
+                var queued3 = ReadOutbound(channel);
+                var q3 = Assert.IsType<SimpleStringRedisMessage>(queued3);
+                Assert.Equal("QUEUED", q3.Content);
+
+                // Execute transaction
+                channel.WriteInbound(Command("EXEC"));
+                channel.RunPendingTasks();
+                var execResponse = ReadOutbound(channel);
+                var execArray = Assert.IsType<ArrayRedisMessage>(execResponse);
+                Assert.Equal(3, execArray.Children.Count);
+
+                // Verify results
+                var result1 = Assert.IsType<SimpleStringRedisMessage>(execArray.Children[0]);
+                Assert.Equal("OK", result1.Content);
+
+                var result2 = Assert.IsType<SimpleStringRedisMessage>(execArray.Children[1]);
+                Assert.Equal("OK", result2.Content);
+
+                var result3 = Assert.IsType<FullBulkStringRedisMessage>(execArray.Children[2]);
+                AssertBulkStringEqual(result3, "value1");
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task Discard_CancelsTransaction()
+        {
+            DredisCommandHandler.TransactionManager.Clear();
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                // Start transaction
+                channel.WriteInbound(Command("MULTI"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                // Queue commands
+                channel.WriteInbound(Command("SET", "key1", "value1"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                // Discard transaction
+                channel.WriteInbound(Command("DISCARD"));
+                channel.RunPendingTasks();
+                var discardResponse = ReadOutbound(channel);
+                var discardStr = Assert.IsType<SimpleStringRedisMessage>(discardResponse);
+                Assert.Equal("OK", discardStr.Content);
+
+                // Verify key was not set
+                channel.WriteInbound(Command("GET", "key1"));
+                channel.RunPendingTasks();
+                var getResponse = ReadOutbound(channel);
+                Assert.Same(FullBulkStringRedisMessage.Null, getResponse);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task Watch_PreventsExecWhenKeyModified()
+        {
+            DredisCommandHandler.TransactionManager.Clear();
+            var store = new InMemoryKeyValueStore();
+            var channel1 = new EmbeddedChannel(new DredisCommandHandler(store));
+            var channel2 = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                // Set initial value
+                channel1.WriteInbound(Command("SET", "mykey", "10"));
+                channel1.RunPendingTasks();
+                _ = ReadOutbound(channel1);
+
+                // Client 1 watches the key
+                channel1.WriteInbound(Command("WATCH", "mykey"));
+                channel1.RunPendingTasks();
+                var watchResponse = ReadOutbound(channel1);
+                var watchStr = Assert.IsType<SimpleStringRedisMessage>(watchResponse);
+                Assert.Equal("OK", watchStr.Content);
+
+                // Client 2 modifies the key
+                channel2.WriteInbound(Command("SET", "mykey", "20"));
+                channel2.RunPendingTasks();
+                _ = ReadOutbound(channel2);
+
+                // Client 1 starts transaction
+                channel1.WriteInbound(Command("MULTI"));
+                channel1.RunPendingTasks();
+                _ = ReadOutbound(channel1);
+
+                // Queue command
+                channel1.WriteInbound(Command("SET", "mykey", "30"));
+                channel1.RunPendingTasks();
+                _ = ReadOutbound(channel1);
+
+                // Execute - should fail because key was modified
+                channel1.WriteInbound(Command("EXEC"));
+                channel1.RunPendingTasks();
+                var execResponse = ReadOutbound(channel1);
+                
+                // Should return null to indicate transaction was aborted
+                Assert.Same(FullBulkStringRedisMessage.Null, execResponse);
+
+                // Verify key still has value from client 2
+                channel1.WriteInbound(Command("GET", "mykey"));
+                channel1.RunPendingTasks();
+                var getResponse = ReadOutbound(channel1);
+                var getValue = Assert.IsType<FullBulkStringRedisMessage>(getResponse);
+                AssertBulkStringEqual(getValue, "20");
+            }
+            finally
+            {
+                await channel1.CloseAsync();
+                await channel2.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task Unwatch_ClearsWatchedKeys()
+        {
+            DredisCommandHandler.TransactionManager.Clear();
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                // Watch a key
+                channel.WriteInbound(Command("WATCH", "mykey"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                // Unwatch all keys
+                channel.WriteInbound(Command("UNWATCH"));
+                channel.RunPendingTasks();
+                var unwatchResponse = ReadOutbound(channel);
+                var unwatchStr = Assert.IsType<SimpleStringRedisMessage>(unwatchResponse);
+                Assert.Equal("OK", unwatchStr.Content);
+
+                // Verify transaction can proceed even after key modification
+                channel.WriteInbound(Command("SET", "mykey", "value"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("MULTI"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("GET", "mykey"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("EXEC"));
+                channel.RunPendingTasks();
+                var execResponse = ReadOutbound(channel);
+                var execArray = Assert.IsType<ArrayRedisMessage>(execResponse);
+                Assert.Equal(1, execArray.Children.Count);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task Multi_WithoutExec_ReturnsError()
+        {
+            DredisCommandHandler.TransactionManager.Clear();
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                // Try EXEC without MULTI
+                channel.WriteInbound(Command("EXEC"));
+                channel.RunPendingTasks();
+                var execResponse = ReadOutbound(channel);
+                var error = Assert.IsType<ErrorRedisMessage>(execResponse);
+                Assert.Contains("EXEC without MULTI", error.Content);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task Multi_Nested_ReturnsError()
+        {
+            DredisCommandHandler.TransactionManager.Clear();
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                // Start transaction
+                channel.WriteInbound(Command("MULTI"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                // Try nested MULTI
+                channel.WriteInbound(Command("MULTI"));
+                channel.RunPendingTasks();
+                var multiResponse = ReadOutbound(channel);
+                var error = Assert.IsType<ErrorRedisMessage>(multiResponse);
+                Assert.Contains("MULTI calls can not be nested", error.Content);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
         /// <summary>
         /// Verifies XADD and XLEN return expected stream length.
         /// </summary>
