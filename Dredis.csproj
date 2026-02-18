@@ -5,6 +5,16 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <ProduceReferenceAssembly>False</ProduceReferenceAssembly>
+    <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+    <Title>Dredis</Title>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageLicenseFile>LICENSE.txt</PackageLicenseFile>
+    <PackageRequireLicenseAcceptance>True</PackageRequireLicenseAcceptance>
+    <Description>A .NET 10 implementation of the Redis Serialization Protocol using DotNetty and C# with a storage abstraction.</Description>
+    <PackageProjectUrl>https://github.com/miserix13/Dredis</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/miserix13/Dredis</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>redis;database;dotnet;</PackageTags>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
@@ -33,6 +43,17 @@
 
   <ItemGroup>
     <ProjectReference Include="Dredis.Abstractions.Storage\Dredis.Abstractions.Storage.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="LICENSE.txt">
+      <Pack>True</Pack>
+      <PackagePath>\</PackagePath>
+    </None>
+    <None Update="README.md">
+      <Pack>True</Pack>
+      <PackagePath>\</PackagePath>
+    </None>
   </ItemGroup>
 
 </Project>
