@@ -2363,8 +2363,28 @@ namespace Dredis
                 return;
             }
 
-            var queryVector = new double[args.Count - 4];
-            for (int i = 4; i < args.Count; i++)
+            int offset = 0;
+            int vectorStartIndex = 4;
+            if (args.Count >= 7 && TryGetString(args[4], out var offsetToken) &&
+                string.Equals(offsetToken, "OFFSET", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!TryGetString(args[5], out var offsetText) || !int.TryParse(offsetText, out offset) || offset < 0)
+                {
+                    WriteError(ctx, "ERR value is not an integer or out of range");
+                    return;
+                }
+
+                vectorStartIndex = 6;
+            }
+
+            if (args.Count <= vectorStartIndex)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'vsearch' command");
+                return;
+            }
+
+            var queryVector = new double[args.Count - vectorStartIndex];
+            for (int i = vectorStartIndex; i < args.Count; i++)
             {
                 if (!TryGetString(args[i], out var valueText) ||
                     !double.TryParse(valueText, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) ||
@@ -2375,10 +2395,10 @@ namespace Dredis
                     return;
                 }
 
-                queryVector[i - 4] = value;
+                queryVector[i - vectorStartIndex] = value;
             }
 
-            var result = await _store.VectorSearchAsync(keyPrefix, topK, metric, queryVector).ConfigureAwait(false);
+            var result = await _store.VectorSearchAsync(keyPrefix, topK, offset, metric, queryVector).ConfigureAwait(false);
             if (result.Status == VectorResultStatus.WrongType)
             {
                 WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");

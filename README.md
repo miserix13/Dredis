@@ -56,6 +56,7 @@ Notes:
 - `JSON.ARRREM` removes an element at the specified index from the array (or last element if no index provided).
 - `JSON.ARRTRIM` trims the array at the specified path to the specified range.
 - `JSON.MGET` retrieves JSON values from multiple keys at the specified path.
+- `VSEARCH` supports optional paging via `OFFSET <n>` before query vector components.
 
 ## Feature matrix
 

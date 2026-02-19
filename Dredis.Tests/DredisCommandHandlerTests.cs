@@ -1631,6 +1631,66 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        public async Task Vector_Search_WithOffset_PaginatesResults()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("VSET", "emb:a", "1", "0"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("VSET", "emb:b", "0.8", "0.2"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("VSET", "emb:c", "0.6", "0.4"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("VSEARCH", "emb:", "2", "COSINE", "OFFSET", "1", "1", "0"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var array = Assert.IsType<ArrayRedisMessage>(response);
+                Assert.Equal(4, array.Children.Count);
+                Assert.Equal("emb:b", GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(array.Children[0])));
+                Assert.Equal("emb:c", GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(array.Children[2])));
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task Vector_Search_InvalidOffset_ReturnsError()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("VSET", "emb:a", "1", "0"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("VSEARCH", "emb:", "2", "COSINE", "OFFSET", "-1", "1", "0"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var error = Assert.IsType<ErrorRedisMessage>(response);
+                Assert.Equal("ERR value is not an integer or out of range", error.Content);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
         public async Task Publish_NoSubscribers_ReturnsZero()
         {
             DredisCommandHandler.PubSubManager.Clear();
@@ -4471,11 +4531,12 @@ namespace Dredis.Tests
         public Task<VectorSearchResult> VectorSearchAsync(
             string keyPrefix,
             int topK,
+            int offset,
             string metric,
             double[] queryVector,
             CancellationToken token = default)
         {
-            if (queryVector.Length == 0 || topK <= 0)
+            if (queryVector.Length == 0 || topK <= 0 || offset < 0)
             {
                 return Task.FromResult(new VectorSearchResult(VectorResultStatus.InvalidArgument, Array.Empty<VectorSearchEntry>()));
             }
@@ -4557,7 +4618,7 @@ namespace Dredis.Tests
                 ordered = scored.OrderByDescending(entry => entry.Score).ThenBy(entry => entry.Key, StringComparer.Ordinal);
             }
 
-            var top = ordered.Take(topK).ToArray();
+            var top = ordered.Skip(offset).Take(topK).ToArray();
             return Task.FromResult(new VectorSearchResult(VectorResultStatus.Ok, top));
         }
 

@@ -2060,6 +2060,7 @@ namespace Dredis.Abstractions.Storage
         /// </summary>
         /// <param name="keyPrefix">The key prefix to search (ordinal starts-with).</param>
         /// <param name="topK">The maximum number of results to return.</param>
+        /// <param name="offset">The number of leading matches to skip for paging.</param>
         /// <param name="metric">The metric name (COSINE, DOT, or L2).</param>
         /// <param name="queryVector">The query vector.</param>
         /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
@@ -2067,6 +2068,7 @@ namespace Dredis.Abstractions.Storage
         Task<VectorSearchResult> VectorSearchAsync(
             string keyPrefix,
             int topK,
+            int offset,
             string metric,
             double[] queryVector,
             CancellationToken token = default);
