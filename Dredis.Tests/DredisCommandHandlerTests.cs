@@ -1536,6 +1536,101 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        public async Task Vector_Delete_ReturnsCountAndRemovesVector()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("VSET", "vec:1", "1", "2"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("VDEL", "vec:1"));
+                channel.RunPendingTasks();
+                var delResponse = ReadOutbound(channel);
+                var deleted = Assert.IsType<IntegerRedisMessage>(delResponse);
+                Assert.Equal(1, deleted.Value);
+
+                channel.WriteInbound(Command("VGET", "vec:1"));
+                channel.RunPendingTasks();
+                var getResponse = ReadOutbound(channel);
+                Assert.Same(FullBulkStringRedisMessage.Null, getResponse);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task Vector_Search_ReturnsTopKByMetric()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("VSET", "emb:a", "1", "0"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("VSET", "emb:b", "0.9", "0.1"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("VSET", "emb:c", "-1", "0"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("VSEARCH", "emb:", "2", "COSINE", "1", "0"));
+                channel.RunPendingTasks();
+                var cosineResponse = ReadOutbound(channel);
+                var cosine = Assert.IsType<ArrayRedisMessage>(cosineResponse);
+                Assert.Equal(4, cosine.Children.Count);
+                Assert.Equal("emb:a", GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(cosine.Children[0])));
+                Assert.Equal("emb:b", GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(cosine.Children[2])));
+
+                channel.WriteInbound(Command("VSEARCH", "emb:", "1", "L2", "1", "0"));
+                channel.RunPendingTasks();
+                var l2Response = ReadOutbound(channel);
+                var l2 = Assert.IsType<ArrayRedisMessage>(l2Response);
+                Assert.Equal(2, l2.Children.Count);
+                Assert.Equal("emb:a", GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(l2.Children[0])));
+                Assert.Equal("0", GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(l2.Children[1])));
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task Vector_Search_InvalidMetric_ReturnsError()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("VSET", "emb:a", "1", "0"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("VSEARCH", "emb:", "5", "BAD", "1", "0"));
+                channel.RunPendingTasks();
+                var response = ReadOutbound(channel);
+                var error = Assert.IsType<ErrorRedisMessage>(response);
+                Assert.Equal("ERR invalid vector operation", error.Content);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
         public async Task Publish_NoSubscribers_ReturnsZero()
         {
             DredisCommandHandler.PubSubManager.Clear();
@@ -4348,6 +4443,122 @@ namespace Dredis.Tests
             }
 
             return Task.FromResult(new VectorSimilarityResult(VectorResultStatus.InvalidArgument, null));
+        }
+
+        public Task<VectorDeleteResult> VectorDeleteAsync(
+            string key,
+            CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _sets.ContainsKey(key) || _sortedSets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            {
+                return Task.FromResult(new VectorDeleteResult(VectorResultStatus.WrongType, 0));
+            }
+
+            var removed = _vectors.Remove(key);
+            if (removed)
+            {
+                _expirations.Remove(key);
+            }
+
+            return Task.FromResult(new VectorDeleteResult(VectorResultStatus.Ok, removed ? 1 : 0));
+        }
+
+        public Task<VectorSearchResult> VectorSearchAsync(
+            string keyPrefix,
+            int topK,
+            string metric,
+            double[] queryVector,
+            CancellationToken token = default)
+        {
+            if (queryVector.Length == 0 || topK <= 0)
+            {
+                return Task.FromResult(new VectorSearchResult(VectorResultStatus.InvalidArgument, Array.Empty<VectorSearchEntry>()));
+            }
+
+            var scored = new List<VectorSearchEntry>();
+            foreach (var kvp in _vectors)
+            {
+                if (!kvp.Key.StartsWith(keyPrefix, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (IsExpired(kvp.Key))
+                {
+                    RemoveKey(kvp.Key);
+                    continue;
+                }
+
+                var candidate = kvp.Value;
+                if (candidate.Length != queryVector.Length)
+                {
+                    continue;
+                }
+
+                double score;
+                if (metric.Equals("DOT", StringComparison.OrdinalIgnoreCase))
+                {
+                    score = 0;
+                    for (int i = 0; i < candidate.Length; i++)
+                    {
+                        score += queryVector[i] * candidate[i];
+                    }
+                }
+                else if (metric.Equals("COSINE", StringComparison.OrdinalIgnoreCase))
+                {
+                    double dot = 0;
+                    double queryNorm = 0;
+                    double candNorm = 0;
+                    for (int i = 0; i < candidate.Length; i++)
+                    {
+                        dot += queryVector[i] * candidate[i];
+                        queryNorm += queryVector[i] * queryVector[i];
+                        candNorm += candidate[i] * candidate[i];
+                    }
+
+                    if (queryNorm <= 0 || candNorm <= 0)
+                    {
+                        continue;
+                    }
+
+                    score = dot / (Math.Sqrt(queryNorm) * Math.Sqrt(candNorm));
+                }
+                else if (metric.Equals("L2", StringComparison.OrdinalIgnoreCase))
+                {
+                    double sum = 0;
+                    for (int i = 0; i < candidate.Length; i++)
+                    {
+                        var delta = queryVector[i] - candidate[i];
+                        sum += delta * delta;
+                    }
+
+                    score = Math.Sqrt(sum);
+                }
+                else
+                {
+                    return Task.FromResult(new VectorSearchResult(VectorResultStatus.InvalidArgument, Array.Empty<VectorSearchEntry>()));
+                }
+
+                scored.Add(new VectorSearchEntry(kvp.Key, score));
+            }
+
+            IEnumerable<VectorSearchEntry> ordered;
+            if (metric.Equals("L2", StringComparison.OrdinalIgnoreCase))
+            {
+                ordered = scored.OrderBy(entry => entry.Score).ThenBy(entry => entry.Key, StringComparer.Ordinal);
+            }
+            else
+            {
+                ordered = scored.OrderByDescending(entry => entry.Score).ThenBy(entry => entry.Key, StringComparer.Ordinal);
+            }
+
+            var top = ordered.Take(topK).ToArray();
+            return Task.FromResult(new VectorSearchResult(VectorResultStatus.Ok, top));
         }
 
         /// <summary>

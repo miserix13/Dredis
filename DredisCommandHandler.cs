@@ -855,8 +855,16 @@ namespace Dredis
                     await HandleVectorDimAsync(ctx, elements);
                     break;
 
+                case "VDEL":
+                    await HandleVectorDelAsync(ctx, elements);
+                    break;
+
                 case "VSIM":
                     await HandleVectorSimAsync(ctx, elements);
+                    break;
+
+                case "VSEARCH":
+                    await HandleVectorSearchAsync(ctx, elements);
                     break;
 
                 case "PUBLISH":
@@ -2213,7 +2221,7 @@ namespace Dredis
 
             if (result.Status == VectorResultStatus.NotFound || result.Vector == null)
             {
-                WriteNullArray(ctx);
+                WriteNullBulkString(ctx);
                 return;
             }
 
@@ -2299,6 +2307,99 @@ namespace Dredis
             }
 
             WriteBulkString(ctx, Utf8.GetBytes(result.Value.Value.ToString("G17", CultureInfo.InvariantCulture)));
+        }
+
+        private async Task HandleVectorDelAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 2)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'vdel' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var result = await _store.VectorDeleteAsync(key).ConfigureAwait(false);
+            if (result.Status == VectorResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            WriteInteger(ctx, result.Deleted);
+            if (result.Deleted > 0)
+            {
+                Transactions.NotifyKeyModified(key, _store);
+            }
+        }
+
+        private async Task HandleVectorSearchAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count < 6)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'vsearch' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var keyPrefix) ||
+                !TryGetString(args[2], out var topKText) ||
+                !TryGetString(args[3], out var metric))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            if (!int.TryParse(topKText, out var topK) || topK <= 0)
+            {
+                WriteError(ctx, "ERR value is not an integer or out of range");
+                return;
+            }
+
+            var queryVector = new double[args.Count - 4];
+            for (int i = 4; i < args.Count; i++)
+            {
+                if (!TryGetString(args[i], out var valueText) ||
+                    !double.TryParse(valueText, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) ||
+                    double.IsNaN(value) ||
+                    double.IsInfinity(value))
+                {
+                    WriteError(ctx, "ERR value is not a valid float");
+                    return;
+                }
+
+                queryVector[i - 4] = value;
+            }
+
+            var result = await _store.VectorSearchAsync(keyPrefix, topK, metric, queryVector).ConfigureAwait(false);
+            if (result.Status == VectorResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            if (result.Status == VectorResultStatus.InvalidArgument)
+            {
+                WriteError(ctx, "ERR invalid vector operation");
+                return;
+            }
+
+            var children = new IRedisMessage[result.Entries.Length * 2];
+            for (int i = 0; i < result.Entries.Length; i++)
+            {
+                children[i * 2] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(result.Entries[i].Key)));
+                var scoreText = result.Entries[i].Score.ToString("G17", CultureInfo.InvariantCulture);
+                children[i * 2 + 1] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(scoreText)));
+            }
+
+            WriteArray(ctx, children);
         }
 
         private async Task HandlePublishAsync(

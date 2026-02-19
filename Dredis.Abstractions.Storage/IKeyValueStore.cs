@@ -1037,6 +1037,78 @@ namespace Dredis.Abstractions.Storage
     }
 
     /// <summary>
+    /// Represents a result for vector delete operations.
+    /// </summary>
+    public sealed class VectorDeleteResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="VectorDeleteResult"/> class.
+        /// </summary>
+        public VectorDeleteResult(VectorResultStatus status, long deleted)
+        {
+            Status = status;
+            Deleted = deleted;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public VectorResultStatus Status { get; }
+        /// <summary>
+        /// Gets the deleted vector count.
+        /// </summary>
+        public long Deleted { get; }
+    }
+
+    /// <summary>
+    /// Represents a vector search entry.
+    /// </summary>
+    public sealed class VectorSearchEntry
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="VectorSearchEntry"/> class.
+        /// </summary>
+        public VectorSearchEntry(string key, double score)
+        {
+            Key = key;
+            Score = score;
+        }
+
+        /// <summary>
+        /// Gets the vector key.
+        /// </summary>
+        public string Key { get; }
+        /// <summary>
+        /// Gets the vector score.
+        /// </summary>
+        public double Score { get; }
+    }
+
+    /// <summary>
+    /// Represents a result for vector search operations.
+    /// </summary>
+    public sealed class VectorSearchResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="VectorSearchResult"/> class.
+        /// </summary>
+        public VectorSearchResult(VectorResultStatus status, VectorSearchEntry[] entries)
+        {
+            Status = status;
+            Entries = entries;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public VectorResultStatus Status { get; }
+        /// <summary>
+        /// Gets the search result entries.
+        /// </summary>
+        public VectorSearchEntry[] Entries { get; }
+    }
+
+    /// <summary>
     /// Key-Value Storage abstraction for Dredis.
     /// </summary>
     public interface IKeyValueStore
@@ -1971,6 +2043,32 @@ namespace Dredis.Abstractions.Storage
             string key,
             string otherKey,
             string metric,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Deletes a vector key.
+        /// </summary>
+        /// <param name="key">The vector key.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains delete status and count.</returns>
+        Task<VectorDeleteResult> VectorDeleteAsync(
+            string key,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Searches vectors by prefix and returns top-k scored matches.
+        /// </summary>
+        /// <param name="keyPrefix">The key prefix to search (ordinal starts-with).</param>
+        /// <param name="topK">The maximum number of results to return.</param>
+        /// <param name="metric">The metric name (COSINE, DOT, or L2).</param>
+        /// <param name="queryVector">The query vector.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains scored entries.</returns>
+        Task<VectorSearchResult> VectorSearchAsync(
+            string keyPrefix,
+            int topK,
+            string metric,
+            double[] queryVector,
             CancellationToken token = default);
     }
 }
