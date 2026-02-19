@@ -3581,32 +3581,15 @@ namespace Dredis
                     break;
                 }
 
-                if (string.Equals(option, "COUNT", StringComparison.OrdinalIgnoreCase))
+                if (TryConsumeReadCountOrBlock(args, ref index, option, ref count, ref block, out var optionError))
                 {
-                    if (index + 1 >= args.Count || !TryGetString(args[index + 1], out var countText) ||
-                        !int.TryParse(countText, out var parsed) || parsed <= 0)
-                    {
-                        WriteError(ctx, "ERR invalid count");
-                        return;
-                    }
-
-                    count = parsed;
-                    index += 2;
                     continue;
                 }
 
-                if (string.Equals(option, "BLOCK", StringComparison.OrdinalIgnoreCase))
+                if (!string.IsNullOrEmpty(optionError))
                 {
-                    if (index + 1 >= args.Count || !TryGetString(args[index + 1], out var blockText) ||
-                        !long.TryParse(blockText, out var blockMs) || blockMs < 0)
-                    {
-                        WriteError(ctx, "ERR invalid block");
-                        return;
-                    }
-
-                    block = TimeSpan.FromMilliseconds(blockMs);
-                    index += 2;
-                    continue;
+                    WriteError(ctx, optionError);
+                    return;
                 }
 
                 WriteError(ctx, "ERR syntax error");
@@ -4124,31 +4107,35 @@ namespace Dredis
 
                 if (string.Equals(token, "COUNT", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (index + 1 >= args.Count ||
-                        !TryGetString(args[index + 1], out var countText) ||
-                        !int.TryParse(countText, out var parsed) || parsed <= 0)
+                    if (!TryConsumeReadCountOrBlock(args, ref index, token, ref count, ref block, out var countError))
                     {
-                        WriteError(ctx, "ERR invalid count");
+                        if (!string.IsNullOrEmpty(countError))
+                        {
+                            WriteError(ctx, countError);
+                            return;
+                        }
+
+                        WriteError(ctx, "ERR syntax error");
                         return;
                     }
 
-                    count = parsed;
-                    index += 2;
                     continue;
                 }
 
                 if (string.Equals(token, "BLOCK", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (index + 1 >= args.Count ||
-                        !TryGetString(args[index + 1], out var blockText) ||
-                        !long.TryParse(blockText, out var ms) || ms < 0)
+                    if (!TryConsumeReadCountOrBlock(args, ref index, token, ref count, ref block, out var blockError))
                     {
-                        WriteError(ctx, "ERR invalid block" );
+                        if (!string.IsNullOrEmpty(blockError))
+                        {
+                            WriteError(ctx, blockError);
+                            return;
+                        }
+
+                        WriteError(ctx, "ERR syntax error");
                         return;
                     }
 
-                    block = TimeSpan.FromMilliseconds(ms);
-                    index += 2;
                     continue;
                 }
 
@@ -4265,6 +4252,49 @@ namespace Dredis
             }
 
             WriteArray(ctx, streamMessages);
+        }
+
+        private static bool TryConsumeReadCountOrBlock(
+            IList<IRedisMessage> args,
+            ref int index,
+            string option,
+            ref int? count,
+            ref TimeSpan? block,
+            out string error)
+        {
+            error = string.Empty;
+
+            if (string.Equals(option, "COUNT", StringComparison.OrdinalIgnoreCase))
+            {
+                if (index + 1 >= args.Count ||
+                    !TryGetString(args[index + 1], out var countText) ||
+                    !int.TryParse(countText, out var parsed) || parsed <= 0)
+                {
+                    error = "ERR invalid count";
+                    return false;
+                }
+
+                count = parsed;
+                index += 2;
+                return true;
+            }
+
+            if (string.Equals(option, "BLOCK", StringComparison.OrdinalIgnoreCase))
+            {
+                if (index + 1 >= args.Count ||
+                    !TryGetString(args[index + 1], out var blockText) ||
+                    !long.TryParse(blockText, out var blockMs) || blockMs < 0)
+                {
+                    error = "ERR invalid block";
+                    return false;
+                }
+
+                block = TimeSpan.FromMilliseconds(blockMs);
+                index += 2;
+                return true;
+            }
+
+            return false;
         }
 
         /// <summary>
