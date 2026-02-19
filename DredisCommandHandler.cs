@@ -652,6 +652,11 @@ namespace Dredis
             }
         }
 
+        public void Register(params ICommand[] commands)
+        {
+            this.commands.AddRange(commands);
+        }
+
         /// <summary>
         /// Executes command handling and converts unexpected exceptions into Redis error replies.
         /// </summary>
