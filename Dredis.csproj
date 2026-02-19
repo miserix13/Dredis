@@ -42,6 +42,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="Dredis.Abstractions.Command\Dredis.Abstractions.Command.csproj" />
     <ProjectReference Include="Dredis.Abstractions.Storage\Dredis.Abstractions.Storage.csproj" />
   </ItemGroup>
 

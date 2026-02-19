@@ -11,6 +11,7 @@ using DotNetty.Common.Concurrency;
 using DotNetty.Common.Utilities;
 using DotNetty.Transport.Channels;
 using DotNetty.Transport.Channels.Embedded;
+using Dredis.Abstractions.Command;
 using Dredis.Abstractions.Storage;
 
 namespace Dredis
@@ -601,6 +602,7 @@ namespace Dredis
         private const long MaxBitOffset = ((long)int.MaxValue * 8) - 1;
         private static readonly PubSubManager PubSub = new PubSubManager();
         private static readonly TransactionManager Transactions = new TransactionManager();
+        private readonly List<ICommand> commands = [];
 
         /// <summary>
         /// Gets the Pub/Sub manager (exposed for testing).
