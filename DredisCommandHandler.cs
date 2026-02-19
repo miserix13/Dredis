@@ -1122,6 +1122,42 @@ namespace Dredis
                     await HandleVectorSearchAsync(ctx, elements);
                     break;
 
+                case "TS.CREATE":
+                    await HandleTimeSeriesCreateAsync(ctx, elements);
+                    break;
+
+                case "TS.ADD":
+                    await HandleTimeSeriesAddAsync(ctx, elements);
+                    break;
+
+                case "TS.INCRBY":
+                    await HandleTimeSeriesIncrByAsync(ctx, elements, decrement: false);
+                    break;
+
+                case "TS.DECRBY":
+                    await HandleTimeSeriesIncrByAsync(ctx, elements, decrement: true);
+                    break;
+
+                case "TS.GET":
+                    await HandleTimeSeriesGetAsync(ctx, elements);
+                    break;
+
+                case "TS.RANGE":
+                    await HandleTimeSeriesRangeAsync(ctx, elements, reverse: false);
+                    break;
+
+                case "TS.REVRANGE":
+                    await HandleTimeSeriesRangeAsync(ctx, elements, reverse: true);
+                    break;
+
+                case "TS.DEL":
+                    await HandleTimeSeriesDeleteAsync(ctx, elements);
+                    break;
+
+                case "TS.INFO":
+                    await HandleTimeSeriesInfoAsync(ctx, elements);
+                    break;
+
                 case "PUBLISH":
                     await HandlePublishAsync(ctx, elements);
                     break;
@@ -4810,6 +4846,420 @@ namespace Dredis
 
             index += 2;
             return true;
+        }
+
+        private async Task HandleTimeSeriesCreateAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count != 2 && args.Count != 4)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'ts.create' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            long? retentionTimeMs = null;
+            if (args.Count == 4)
+            {
+                if (!TryGetString(args[2], out var retentionKeyword) ||
+                    !retentionKeyword.Equals("RETENTION", StringComparison.OrdinalIgnoreCase) ||
+                    !TryGetString(args[3], out var retentionText) ||
+                    !long.TryParse(retentionText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedRetention) ||
+                    parsedRetention < 0)
+                {
+                    WriteError(ctx, "ERR invalid arguments");
+                    return;
+                }
+
+                retentionTimeMs = parsedRetention;
+            }
+
+            var result = await _store.TimeSeriesCreateAsync(key, retentionTimeMs).ConfigureAwait(false);
+            if (result == TimeSeriesResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            if (result == TimeSeriesResultStatus.Exists)
+            {
+                WriteError(ctx, "ERR TSDB: key already exists");
+                return;
+            }
+
+            WriteSimpleString(ctx, "OK");
+            Transactions.NotifyKeyModified(key, _store);
+        }
+
+        private async Task HandleTimeSeriesAddAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count != 4)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'ts.add' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key) ||
+                !TryGetString(args[2], out var timestampText) ||
+                !TryGetString(args[3], out var valueText) ||
+                !double.TryParse(valueText, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) ||
+                double.IsNaN(value) ||
+                double.IsInfinity(value))
+            {
+                WriteError(ctx, "ERR invalid arguments");
+                return;
+            }
+
+            long timestamp;
+            if (timestampText == "*")
+            {
+                timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            }
+            else if (!long.TryParse(timestampText, NumberStyles.Integer, CultureInfo.InvariantCulture, out timestamp))
+            {
+                WriteError(ctx, "ERR invalid arguments");
+                return;
+            }
+
+            var result = await _store.TimeSeriesAddAsync(key, timestamp, value, createIfMissing: true).ConfigureAwait(false);
+            if (result.Status == TimeSeriesResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            if (result.Status == TimeSeriesResultStatus.InvalidArgument || !result.Timestamp.HasValue)
+            {
+                WriteError(ctx, "ERR invalid arguments");
+                return;
+            }
+
+            WriteInteger(ctx, result.Timestamp.Value);
+            Transactions.NotifyKeyModified(key, _store);
+        }
+
+        private async Task HandleTimeSeriesIncrByAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args, bool decrement)
+        {
+            if (args.Count != 3 && args.Count != 5)
+            {
+                var command = decrement ? "ts.decrby" : "ts.incrby";
+                WriteError(ctx, $"ERR wrong number of arguments for '{command}' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key) ||
+                !TryGetString(args[2], out var incrementText) ||
+                !double.TryParse(incrementText, NumberStyles.Float, CultureInfo.InvariantCulture, out var increment) ||
+                double.IsNaN(increment) ||
+                double.IsInfinity(increment))
+            {
+                WriteError(ctx, "ERR invalid arguments");
+                return;
+            }
+
+            if (decrement)
+            {
+                increment = -increment;
+            }
+
+            long? timestamp = null;
+            if (args.Count == 5)
+            {
+                if (!TryGetString(args[3], out var timestampKeyword) ||
+                    !timestampKeyword.Equals("TIMESTAMP", StringComparison.OrdinalIgnoreCase) ||
+                    !TryGetString(args[4], out var timestampText) ||
+                    !long.TryParse(timestampText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedTimestamp))
+                {
+                    WriteError(ctx, "ERR invalid arguments");
+                    return;
+                }
+
+                timestamp = parsedTimestamp;
+            }
+
+            var result = await _store.TimeSeriesIncrementByAsync(key, increment, timestamp, createIfMissing: true).ConfigureAwait(false);
+            if (result.Status == TimeSeriesResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            if (result.Status == TimeSeriesResultStatus.InvalidArgument || !result.Timestamp.HasValue)
+            {
+                WriteError(ctx, "ERR invalid arguments");
+                return;
+            }
+
+            WriteInteger(ctx, result.Timestamp.Value);
+            Transactions.NotifyKeyModified(key, _store);
+        }
+
+        private async Task HandleTimeSeriesGetAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count != 2)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'ts.get' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var result = await _store.TimeSeriesGetAsync(key).ConfigureAwait(false);
+            if (result.Status == TimeSeriesResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            if (result.Status == TimeSeriesResultStatus.NotFound || result.Sample == null)
+            {
+                WriteNullBulkString(ctx);
+                return;
+            }
+
+            var response = new IRedisMessage[]
+            {
+                new IntegerRedisMessage(result.Sample.Timestamp),
+                new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(result.Sample.Value.ToString("G17", CultureInfo.InvariantCulture))))
+            };
+
+            WriteArray(ctx, response);
+        }
+
+        private async Task HandleTimeSeriesRangeAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args, bool reverse)
+        {
+            var commandName = reverse ? "ts.revrange" : "ts.range";
+            if (args.Count < 4)
+            {
+                WriteError(ctx, $"ERR wrong number of arguments for '{commandName}' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key) ||
+                !TryGetString(args[2], out var fromText) ||
+                !TryGetString(args[3], out var toText))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            if (!TryParseTimeSeriesRangeBoundary(fromText, startBoundary: true, out var fromTimestamp) ||
+                !TryParseTimeSeriesRangeBoundary(toText, startBoundary: false, out var toTimestamp))
+            {
+                WriteError(ctx, "ERR invalid arguments");
+                return;
+            }
+
+            int? count = null;
+            string? aggregationType = null;
+            long? bucketDurationMs = null;
+
+            int index = 4;
+            while (index < args.Count)
+            {
+                if (!TryGetString(args[index], out var token))
+                {
+                    WriteError(ctx, "ERR invalid arguments");
+                    return;
+                }
+
+                if (token.Equals("COUNT", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (count.HasValue || index + 1 >= args.Count ||
+                        !TryGetString(args[index + 1], out var countText) ||
+                        !int.TryParse(countText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedCount) ||
+                        parsedCount < 0)
+                    {
+                        WriteError(ctx, "ERR invalid arguments");
+                        return;
+                    }
+
+                    count = parsedCount;
+                    index += 2;
+                    continue;
+                }
+
+                if (token.Equals("AGGREGATION", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (aggregationType != null || index + 2 >= args.Count ||
+                        !TryGetString(args[index + 1], out var parsedAggregationType) ||
+                        !TryGetString(args[index + 2], out var bucketText) ||
+                        !long.TryParse(bucketText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedBucket) ||
+                        parsedBucket <= 0)
+                    {
+                        WriteError(ctx, "ERR invalid arguments");
+                        return;
+                    }
+
+                    var normalizedAggregation = parsedAggregationType.ToUpperInvariant();
+                    if (normalizedAggregation != "AVG" &&
+                        normalizedAggregation != "SUM" &&
+                        normalizedAggregation != "MIN" &&
+                        normalizedAggregation != "MAX" &&
+                        normalizedAggregation != "COUNT")
+                    {
+                        WriteError(ctx, "ERR invalid arguments");
+                        return;
+                    }
+
+                    aggregationType = normalizedAggregation;
+                    bucketDurationMs = parsedBucket;
+                    index += 3;
+                    continue;
+                }
+
+                WriteError(ctx, "ERR syntax error");
+                return;
+            }
+
+            var result = await _store.TimeSeriesRangeAsync(
+                key,
+                fromTimestamp,
+                toTimestamp,
+                reverse,
+                count,
+                aggregationType,
+                bucketDurationMs).ConfigureAwait(false);
+            if (result.Status == TimeSeriesResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            if (result.Status == TimeSeriesResultStatus.InvalidArgument)
+            {
+                WriteError(ctx, "ERR invalid arguments");
+                return;
+            }
+
+            if (result.Status == TimeSeriesResultStatus.NotFound)
+            {
+                WriteArray(ctx, Array.Empty<IRedisMessage>());
+                return;
+            }
+
+            var children = new IRedisMessage[result.Samples.Length];
+            for (int i = 0; i < result.Samples.Length; i++)
+            {
+                children[i] = new ArrayRedisMessage(new IRedisMessage[]
+                {
+                    new IntegerRedisMessage(result.Samples[i].Timestamp),
+                    new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(result.Samples[i].Value.ToString("G17", CultureInfo.InvariantCulture))))
+                });
+            }
+
+            WriteArray(ctx, children);
+        }
+
+        private async Task HandleTimeSeriesDeleteAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count != 4)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'ts.del' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key) ||
+                !TryGetString(args[2], out var fromText) ||
+                !TryGetString(args[3], out var toText) ||
+                !TryParseTimeSeriesRangeBoundary(fromText, startBoundary: true, out var fromTimestamp) ||
+                !TryParseTimeSeriesRangeBoundary(toText, startBoundary: false, out var toTimestamp))
+            {
+                WriteError(ctx, "ERR invalid arguments");
+                return;
+            }
+
+            var result = await _store.TimeSeriesDeleteAsync(key, fromTimestamp, toTimestamp).ConfigureAwait(false);
+            if (result.Status == TimeSeriesResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            if (result.Status == TimeSeriesResultStatus.InvalidArgument)
+            {
+                WriteError(ctx, "ERR invalid arguments");
+                return;
+            }
+
+            WriteInteger(ctx, result.Deleted);
+            if (result.Deleted > 0)
+            {
+                Transactions.NotifyKeyModified(key, _store);
+            }
+        }
+
+        private async Task HandleTimeSeriesInfoAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count != 2)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'ts.info' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var result = await _store.TimeSeriesInfoAsync(key).ConfigureAwait(false);
+            if (result.Status == TimeSeriesResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            if (result.Status == TimeSeriesResultStatus.NotFound)
+            {
+                WriteError(ctx, "ERR key does not exist");
+                return;
+            }
+
+            var fields = new List<IRedisMessage>
+            {
+                new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes("totalSamples"))),
+                new IntegerRedisMessage(result.TotalSamples),
+                new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes("retentionTime"))),
+                new IntegerRedisMessage(result.RetentionTimeMs),
+                new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes("firstTimestamp"))),
+                result.FirstTimestamp.HasValue ? new IntegerRedisMessage(result.FirstTimestamp.Value) : FullBulkStringRedisMessage.Null,
+                new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes("lastTimestamp"))),
+                result.LastTimestamp.HasValue ? new IntegerRedisMessage(result.LastTimestamp.Value) : FullBulkStringRedisMessage.Null
+            };
+
+            WriteArray(ctx, fields);
+        }
+
+        private static bool TryParseTimeSeriesRangeBoundary(string token, bool startBoundary, out long timestamp)
+        {
+            if (token == "-")
+            {
+                timestamp = long.MinValue;
+                return true;
+            }
+
+            if (token == "+")
+            {
+                timestamp = long.MaxValue;
+                return true;
+            }
+
+            if (long.TryParse(token, NumberStyles.Integer, CultureInfo.InvariantCulture, out timestamp))
+            {
+                return true;
+            }
+
+            timestamp = startBoundary ? long.MinValue : long.MaxValue;
+            return false;
         }
 
         private async Task HandlePublishAsync(

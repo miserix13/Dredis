@@ -1365,6 +1365,191 @@ namespace Dredis.Abstractions.Storage
     }
 
     /// <summary>
+    /// Describes results of time-series operations.
+    /// </summary>
+    public enum TimeSeriesResultStatus
+    {
+        Ok,
+        WrongType,
+        NotFound,
+        InvalidArgument,
+        Exists
+    }
+
+    /// <summary>
+    /// Represents one time-series sample.
+    /// </summary>
+    public sealed class TimeSeriesSample
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="TimeSeriesSample"/> class.
+        /// </summary>
+        public TimeSeriesSample(long timestamp, double value)
+        {
+            Timestamp = timestamp;
+            Value = value;
+        }
+
+        /// <summary>
+        /// Gets the sample timestamp in Unix milliseconds.
+        /// </summary>
+        public long Timestamp { get; }
+
+        /// <summary>
+        /// Gets the sample numeric value.
+        /// </summary>
+        public double Value { get; }
+    }
+
+    /// <summary>
+    /// Represents a result for time-series add/increment operations.
+    /// </summary>
+    public sealed class TimeSeriesAddResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="TimeSeriesAddResult"/> class.
+        /// </summary>
+        public TimeSeriesAddResult(TimeSeriesResultStatus status, long? timestamp)
+        {
+            Status = status;
+            Timestamp = timestamp;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public TimeSeriesResultStatus Status { get; }
+
+        /// <summary>
+        /// Gets the resulting sample timestamp.
+        /// </summary>
+        public long? Timestamp { get; }
+    }
+
+    /// <summary>
+    /// Represents a result for time-series get operations.
+    /// </summary>
+    public sealed class TimeSeriesGetResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="TimeSeriesGetResult"/> class.
+        /// </summary>
+        public TimeSeriesGetResult(TimeSeriesResultStatus status, TimeSeriesSample? sample)
+        {
+            Status = status;
+            Sample = sample;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public TimeSeriesResultStatus Status { get; }
+
+        /// <summary>
+        /// Gets the returned sample.
+        /// </summary>
+        public TimeSeriesSample? Sample { get; }
+    }
+
+    /// <summary>
+    /// Represents a result for time-series range operations.
+    /// </summary>
+    public sealed class TimeSeriesRangeResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="TimeSeriesRangeResult"/> class.
+        /// </summary>
+        public TimeSeriesRangeResult(TimeSeriesResultStatus status, TimeSeriesSample[] samples)
+        {
+            Status = status;
+            Samples = samples;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public TimeSeriesResultStatus Status { get; }
+
+        /// <summary>
+        /// Gets range samples.
+        /// </summary>
+        public TimeSeriesSample[] Samples { get; }
+    }
+
+    /// <summary>
+    /// Represents a result for time-series delete operations.
+    /// </summary>
+    public sealed class TimeSeriesDeleteResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="TimeSeriesDeleteResult"/> class.
+        /// </summary>
+        public TimeSeriesDeleteResult(TimeSeriesResultStatus status, long deleted)
+        {
+            Status = status;
+            Deleted = deleted;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public TimeSeriesResultStatus Status { get; }
+
+        /// <summary>
+        /// Gets the number of deleted samples.
+        /// </summary>
+        public long Deleted { get; }
+    }
+
+    /// <summary>
+    /// Represents a result for time-series info operations.
+    /// </summary>
+    public sealed class TimeSeriesInfoResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="TimeSeriesInfoResult"/> class.
+        /// </summary>
+        public TimeSeriesInfoResult(
+            TimeSeriesResultStatus status,
+            long totalSamples,
+            long? firstTimestamp,
+            long? lastTimestamp,
+            long retentionTimeMs)
+        {
+            Status = status;
+            TotalSamples = totalSamples;
+            FirstTimestamp = firstTimestamp;
+            LastTimestamp = lastTimestamp;
+            RetentionTimeMs = retentionTimeMs;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public TimeSeriesResultStatus Status { get; }
+
+        /// <summary>
+        /// Gets the total number of samples.
+        /// </summary>
+        public long TotalSamples { get; }
+
+        /// <summary>
+        /// Gets the first sample timestamp, if any.
+        /// </summary>
+        public long? FirstTimestamp { get; }
+
+        /// <summary>
+        /// Gets the last sample timestamp, if any.
+        /// </summary>
+        public long? LastTimestamp { get; }
+
+        /// <summary>
+        /// Gets the configured retention in milliseconds (0 means unlimited).
+        /// </summary>
+        public long RetentionTimeMs { get; }
+    }
+
+    /// <summary>
     /// Key-Value Storage abstraction for Dredis.
     /// </summary>
     public interface IKeyValueStore
@@ -2625,6 +2810,70 @@ namespace Dredis.Abstractions.Storage
             int offset,
             string metric,
             double[] queryVector,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Creates a time-series key.
+        /// </summary>
+        Task<TimeSeriesResultStatus> TimeSeriesCreateAsync(
+            string key,
+            long? retentionTimeMs,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Adds or updates a sample in a time-series key.
+        /// </summary>
+        Task<TimeSeriesAddResult> TimeSeriesAddAsync(
+            string key,
+            long timestamp,
+            double value,
+            bool createIfMissing,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Increments a sample value at a given timestamp.
+        /// </summary>
+        Task<TimeSeriesAddResult> TimeSeriesIncrementByAsync(
+            string key,
+            double increment,
+            long? timestamp,
+            bool createIfMissing,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Gets the latest sample for a time-series key.
+        /// </summary>
+        Task<TimeSeriesGetResult> TimeSeriesGetAsync(
+            string key,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Gets a range of samples for a time-series key.
+        /// </summary>
+        Task<TimeSeriesRangeResult> TimeSeriesRangeAsync(
+            string key,
+            long fromTimestamp,
+            long toTimestamp,
+            bool reverse,
+            int? count,
+            string? aggregationType,
+            long? bucketDurationMs,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Deletes samples in an inclusive timestamp range.
+        /// </summary>
+        Task<TimeSeriesDeleteResult> TimeSeriesDeleteAsync(
+            string key,
+            long fromTimestamp,
+            long toTimestamp,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Gets metadata for a time-series key.
+        /// </summary>
+        Task<TimeSeriesInfoResult> TimeSeriesInfoAsync(
+            string key,
             CancellationToken token = default);
     }
 }
