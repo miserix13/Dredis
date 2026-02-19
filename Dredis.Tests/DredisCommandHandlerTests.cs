@@ -1401,6 +1401,141 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        public async Task Vector_SetGetDim_RoundTrip()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("VSET", "emb:1", "1", "2.5", "-3"));
+                channel.RunPendingTasks();
+                var setResponse = ReadOutbound(channel);
+                var setOk = Assert.IsType<SimpleStringRedisMessage>(setResponse);
+                Assert.Equal("OK", setOk.Content);
+
+                channel.WriteInbound(Command("VDIM", "emb:1"));
+                channel.RunPendingTasks();
+                var dimResponse = ReadOutbound(channel);
+                var dim = Assert.IsType<IntegerRedisMessage>(dimResponse);
+                Assert.Equal(3, dim.Value);
+
+                channel.WriteInbound(Command("VGET", "emb:1"));
+                channel.RunPendingTasks();
+                var getResponse = ReadOutbound(channel);
+                var array = Assert.IsType<ArrayRedisMessage>(getResponse);
+                Assert.Equal(3, array.Children.Count);
+                Assert.Equal("1", GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(array.Children[0])));
+                Assert.Equal("2.5", GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(array.Children[1])));
+                Assert.Equal("-3", GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(array.Children[2])));
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task Vector_Similarity_DefaultCosine_ReturnsValue()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("VSET", "a", "1", "0"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("VSET", "b", "1", "0"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("VSIM", "a", "b"));
+                channel.RunPendingTasks();
+                var response = ReadOutbound(channel);
+                var bulk = Assert.IsType<FullBulkStringRedisMessage>(response);
+                Assert.Equal("1", GetBulkString(bulk));
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task Vector_Similarity_DotAndL2_ReturnExpectedValues()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("VSET", "a", "1", "2"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("VSET", "b", "3", "4"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("VSIM", "a", "b", "DOT"));
+                channel.RunPendingTasks();
+                var dotResponse = ReadOutbound(channel);
+                var dot = Assert.IsType<FullBulkStringRedisMessage>(dotResponse);
+                Assert.Equal("11", GetBulkString(dot));
+
+                channel.WriteInbound(Command("VSIM", "a", "b", "L2"));
+                channel.RunPendingTasks();
+                var l2Response = ReadOutbound(channel);
+                var l2 = Assert.IsType<FullBulkStringRedisMessage>(l2Response);
+                Assert.Equal(Math.Sqrt(8).ToString("G17", CultureInfo.InvariantCulture), GetBulkString(l2));
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task Vector_WrongTypeAndInvalidOp_ReturnErrors()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("SET", "plain", "value"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("VSET", "plain", "1", "2"));
+                channel.RunPendingTasks();
+                var wrongTypeResponse = ReadOutbound(channel);
+                var wrongType = Assert.IsType<ErrorRedisMessage>(wrongTypeResponse);
+                Assert.Equal("WRONGTYPE Operation against a key holding the wrong kind of value", wrongType.Content);
+
+                channel.WriteInbound(Command("VSET", "x", "1", "2"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("VSET", "y", "1"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("VSIM", "x", "y", "COSINE"));
+                channel.RunPendingTasks();
+                var invalidResponse = ReadOutbound(channel);
+                var invalid = Assert.IsType<ErrorRedisMessage>(invalidResponse);
+                Assert.Equal("ERR invalid vector operation", invalid.Content);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
         public async Task Publish_NoSubscribers_ReturnsZero()
         {
             DredisCommandHandler.PubSubManager.Clear();
@@ -3254,6 +3389,7 @@ namespace Dredis.Tests
         private readonly Dictionary<string, List<byte[]>> _lists = new(StringComparer.Ordinal);
         private readonly Dictionary<string, Dictionary<string, byte[]>> _sets = new(StringComparer.Ordinal);
         private readonly Dictionary<string, Dictionary<string, SortedSetMember>> _sortedSets = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, double[]> _vectors = new(StringComparer.Ordinal);
         private readonly Dictionary<string, List<StreamEntryModel>> _streams = new(StringComparer.Ordinal);
         private readonly Dictionary<string, StreamId> _streamLastIds = new(StringComparer.Ordinal);
         private readonly Dictionary<string, Dictionary<string, StreamGroupState>> _streamGroups = new(StringComparer.Ordinal);
@@ -3375,6 +3511,7 @@ namespace Dredis.Tests
             _lists.Remove(key);
             _sets.Remove(key);
             _sortedSets.Remove(key);
+            _vectors.Remove(key);
             _streams.Remove(key);
             _streamLastIds.Remove(key);
             _streamGroups.Remove(key);
@@ -3416,6 +3553,7 @@ namespace Dredis.Tests
             _lists.Remove(key);
             _sets.Remove(key);
             _sortedSets.Remove(key);
+            _vectors.Remove(key);
             _streams.Remove(key);
             _streamLastIds.Remove(key);
             _streamGroups.Remove(key);
@@ -3458,6 +3596,7 @@ namespace Dredis.Tests
                 _lists.Remove(item.Key);
                 _sets.Remove(item.Key);
                 _sortedSets.Remove(item.Key);
+                _vectors.Remove(item.Key);
                 _streams.Remove(item.Key);
                 _streamLastIds.Remove(item.Key);
                 _streamGroups.Remove(item.Key);
@@ -4061,6 +4200,156 @@ namespace Dredis.Tests
             }
         }
 
+        public Task<VectorSetResult> VectorSetAsync(
+            string key,
+            double[] vector,
+            CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _sets.ContainsKey(key) || _sortedSets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            {
+                return Task.FromResult(new VectorSetResult(VectorResultStatus.WrongType));
+            }
+
+            _vectors[key] = vector.ToArray();
+            _data.Remove(key);
+            _hashes.Remove(key);
+            _lists.Remove(key);
+            _sets.Remove(key);
+            _sortedSets.Remove(key);
+            _streams.Remove(key);
+            _streamLastIds.Remove(key);
+            _streamGroups.Remove(key);
+            return Task.FromResult(new VectorSetResult(VectorResultStatus.Ok));
+        }
+
+        public Task<VectorGetResult> VectorGetAsync(
+            string key,
+            CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _sets.ContainsKey(key) || _sortedSets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            {
+                return Task.FromResult(new VectorGetResult(VectorResultStatus.WrongType, null));
+            }
+
+            if (!_vectors.TryGetValue(key, out var vector))
+            {
+                return Task.FromResult(new VectorGetResult(VectorResultStatus.NotFound, null));
+            }
+
+            return Task.FromResult(new VectorGetResult(VectorResultStatus.Ok, vector.ToArray()));
+        }
+
+        public Task<VectorSizeResult> VectorSizeAsync(
+            string key,
+            CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+            }
+
+            if (_data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _sets.ContainsKey(key) || _sortedSets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            {
+                return Task.FromResult(new VectorSizeResult(VectorResultStatus.WrongType, 0));
+            }
+
+            if (!_vectors.TryGetValue(key, out var vector))
+            {
+                return Task.FromResult(new VectorSizeResult(VectorResultStatus.NotFound, 0));
+            }
+
+            return Task.FromResult(new VectorSizeResult(VectorResultStatus.Ok, vector.LongLength));
+        }
+
+        public Task<VectorSimilarityResult> VectorSimilarityAsync(
+            string key,
+            string otherKey,
+            string metric,
+            CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+            }
+
+            if (IsExpired(otherKey))
+            {
+                RemoveKey(otherKey);
+            }
+
+            if ((_data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _sets.ContainsKey(key) || _sortedSets.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key)) ||
+                (_data.ContainsKey(otherKey) || _hashes.ContainsKey(otherKey) || _lists.ContainsKey(otherKey) || _sets.ContainsKey(otherKey) || _sortedSets.ContainsKey(otherKey) || _streams.ContainsKey(otherKey) || _streamGroups.ContainsKey(otherKey)))
+            {
+                return Task.FromResult(new VectorSimilarityResult(VectorResultStatus.WrongType, null));
+            }
+
+            if (!_vectors.TryGetValue(key, out var left) || !_vectors.TryGetValue(otherKey, out var right))
+            {
+                return Task.FromResult(new VectorSimilarityResult(VectorResultStatus.NotFound, null));
+            }
+
+            if (left.Length != right.Length || left.Length == 0)
+            {
+                return Task.FromResult(new VectorSimilarityResult(VectorResultStatus.InvalidArgument, null));
+            }
+
+            if (metric.Equals("DOT", StringComparison.OrdinalIgnoreCase))
+            {
+                double dot = 0;
+                for (int i = 0; i < left.Length; i++)
+                {
+                    dot += left[i] * right[i];
+                }
+
+                return Task.FromResult(new VectorSimilarityResult(VectorResultStatus.Ok, dot));
+            }
+
+            if (metric.Equals("COSINE", StringComparison.OrdinalIgnoreCase))
+            {
+                double dot = 0;
+                double leftNorm = 0;
+                double rightNorm = 0;
+                for (int i = 0; i < left.Length; i++)
+                {
+                    dot += left[i] * right[i];
+                    leftNorm += left[i] * left[i];
+                    rightNorm += right[i] * right[i];
+                }
+
+                if (leftNorm <= 0 || rightNorm <= 0)
+                {
+                    return Task.FromResult(new VectorSimilarityResult(VectorResultStatus.InvalidArgument, null));
+                }
+
+                var cosine = dot / (Math.Sqrt(leftNorm) * Math.Sqrt(rightNorm));
+                return Task.FromResult(new VectorSimilarityResult(VectorResultStatus.Ok, cosine));
+            }
+
+            if (metric.Equals("L2", StringComparison.OrdinalIgnoreCase))
+            {
+                double sum = 0;
+                for (int i = 0; i < left.Length; i++)
+                {
+                    var delta = left[i] - right[i];
+                    sum += delta * delta;
+                }
+
+                return Task.FromResult(new VectorSimilarityResult(VectorResultStatus.Ok, Math.Sqrt(sum)));
+            }
+
+            return Task.FromResult(new VectorSimilarityResult(VectorResultStatus.InvalidArgument, null));
+        }
+
         /// <summary>
         /// Adds a stream entry and returns its id.
         /// </summary>
@@ -4084,6 +4373,7 @@ namespace Dredis.Tests
                 _lists.Remove(key);
                 _sets.Remove(key);
                 _sortedSets.Remove(key);
+                _vectors.Remove(key);
             }
 
             var lastId = _streamLastIds.TryGetValue(key, out var last) ? last : new StreamId(-1, -1);
@@ -6024,7 +6314,7 @@ namespace Dredis.Tests
                 return false;
             }
 
-            return _data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _sets.ContainsKey(key) || _sortedSets.ContainsKey(key) || _streams.ContainsKey(key);
+            return _data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _sets.ContainsKey(key) || _sortedSets.ContainsKey(key) || _vectors.ContainsKey(key) || _streams.ContainsKey(key);
         }
 
         /// <summary>
@@ -6050,6 +6340,7 @@ namespace Dredis.Tests
             removed |= _lists.Remove(key);
             removed |= _sets.Remove(key);
             removed |= _sortedSets.Remove(key);
+            removed |= _vectors.Remove(key);
             removed |= _streams.Remove(key);
             _streamLastIds.Remove(key);
             _streamGroups.Remove(key);

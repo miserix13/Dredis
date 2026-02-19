@@ -935,6 +935,108 @@ namespace Dredis.Abstractions.Storage
     }
 
     /// <summary>
+    /// Describes results of vector operations.
+    /// </summary>
+    public enum VectorResultStatus
+    {
+        Ok,
+        WrongType,
+        NotFound,
+        InvalidArgument
+    }
+
+    /// <summary>
+    /// Represents a result for vector set operations.
+    /// </summary>
+    public sealed class VectorSetResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="VectorSetResult"/> class.
+        /// </summary>
+        public VectorSetResult(VectorResultStatus status)
+        {
+            Status = status;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public VectorResultStatus Status { get; }
+    }
+
+    /// <summary>
+    /// Represents a result for vector get operations.
+    /// </summary>
+    public sealed class VectorGetResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="VectorGetResult"/> class.
+        /// </summary>
+        public VectorGetResult(VectorResultStatus status, double[]? vector)
+        {
+            Status = status;
+            Vector = vector;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public VectorResultStatus Status { get; }
+        /// <summary>
+        /// Gets the vector value.
+        /// </summary>
+        public double[]? Vector { get; }
+    }
+
+    /// <summary>
+    /// Represents a result for vector dimension operations.
+    /// </summary>
+    public sealed class VectorSizeResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="VectorSizeResult"/> class.
+        /// </summary>
+        public VectorSizeResult(VectorResultStatus status, long size)
+        {
+            Status = status;
+            Size = size;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public VectorResultStatus Status { get; }
+        /// <summary>
+        /// Gets the vector dimension.
+        /// </summary>
+        public long Size { get; }
+    }
+
+    /// <summary>
+    /// Represents a result for vector similarity operations.
+    /// </summary>
+    public sealed class VectorSimilarityResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="VectorSimilarityResult"/> class.
+        /// </summary>
+        public VectorSimilarityResult(VectorResultStatus status, double? value)
+        {
+            Status = status;
+            Value = value;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public VectorResultStatus Status { get; }
+        /// <summary>
+        /// Gets the similarity (or distance) value.
+        /// </summary>
+        public double? Value { get; }
+    }
+
+    /// <summary>
     /// Key-Value Storage abstraction for Dredis.
     /// </summary>
     public interface IKeyValueStore
@@ -1823,6 +1925,52 @@ namespace Dredis.Abstractions.Storage
         Task<JsonMGetResult> JsonMgetAsync(
             string[] keys,
             string path,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Sets a vector value at the specified key.
+        /// </summary>
+        /// <param name="key">The vector key.</param>
+        /// <param name="vector">The vector components.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the status.</returns>
+        Task<VectorSetResult> VectorSetAsync(
+            string key,
+            double[] vector,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Gets a vector value at the specified key.
+        /// </summary>
+        /// <param name="key">The vector key.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the vector.</returns>
+        Task<VectorGetResult> VectorGetAsync(
+            string key,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Gets vector dimension for the specified key.
+        /// </summary>
+        /// <param name="key">The vector key.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the vector size.</returns>
+        Task<VectorSizeResult> VectorSizeAsync(
+            string key,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Computes similarity (or distance) between two vectors.
+        /// </summary>
+        /// <param name="key">The first vector key.</param>
+        /// <param name="otherKey">The second vector key.</param>
+        /// <param name="metric">The metric name (COSINE, DOT, or L2).</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains the computed value.</returns>
+        Task<VectorSimilarityResult> VectorSimilarityAsync(
+            string key,
+            string otherKey,
+            string metric,
             CancellationToken token = default);
     }
 }

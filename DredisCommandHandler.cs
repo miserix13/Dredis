@@ -843,6 +843,22 @@ namespace Dredis
                     await HandleSortedSetRemoveRangeByScoreAsync(ctx, elements);
                     break;
 
+                case "VSET":
+                    await HandleVectorSetAsync(ctx, elements);
+                    break;
+
+                case "VGET":
+                    await HandleVectorGetAsync(ctx, elements);
+                    break;
+
+                case "VDIM":
+                    await HandleVectorDimAsync(ctx, elements);
+                    break;
+
+                case "VSIM":
+                    await HandleVectorSimAsync(ctx, elements);
+                    break;
+
                 case "PUBLISH":
                     await HandlePublishAsync(ctx, elements);
                     break;
@@ -2128,6 +2144,161 @@ namespace Dredis
             }
 
             WriteInteger(ctx, result.Removed);
+        }
+
+        private async Task HandleVectorSetAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count < 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'vset' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var vector = new double[args.Count - 2];
+            for (int i = 2; i < args.Count; i++)
+            {
+                if (!TryGetString(args[i], out var valueText) ||
+                    !double.TryParse(valueText, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) ||
+                    double.IsNaN(value) ||
+                    double.IsInfinity(value))
+                {
+                    WriteError(ctx, "ERR value is not a valid float");
+                    return;
+                }
+
+                vector[i - 2] = value;
+            }
+
+            var result = await _store.VectorSetAsync(key, vector).ConfigureAwait(false);
+            if (result.Status == VectorResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            WriteSimpleString(ctx, "OK");
+            Transactions.NotifyKeyModified(key, _store);
+        }
+
+        private async Task HandleVectorGetAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 2)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'vget' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var result = await _store.VectorGetAsync(key).ConfigureAwait(false);
+            if (result.Status == VectorResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            if (result.Status == VectorResultStatus.NotFound || result.Vector == null)
+            {
+                WriteNullArray(ctx);
+                return;
+            }
+
+            var children = new IRedisMessage[result.Vector.Length];
+            for (int i = 0; i < result.Vector.Length; i++)
+            {
+                var text = result.Vector[i].ToString("G17", CultureInfo.InvariantCulture);
+                children[i] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(text)));
+            }
+
+            WriteArray(ctx, children);
+        }
+
+        private async Task HandleVectorDimAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 2)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'vdim' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var result = await _store.VectorSizeAsync(key).ConfigureAwait(false);
+            if (result.Status == VectorResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            WriteInteger(ctx, result.Size);
+        }
+
+        private async Task HandleVectorSimAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 3 && args.Count != 4)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'vsim' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key) || !TryGetString(args[2], out var otherKey))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var metric = "COSINE";
+            if (args.Count == 4)
+            {
+                if (!TryGetString(args[3], out metric))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+            }
+
+            var result = await _store.VectorSimilarityAsync(key, otherKey, metric).ConfigureAwait(false);
+            if (result.Status == VectorResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            if (result.Status == VectorResultStatus.InvalidArgument)
+            {
+                WriteError(ctx, "ERR invalid vector operation");
+                return;
+            }
+
+            if (result.Status == VectorResultStatus.NotFound || !result.Value.HasValue)
+            {
+                WriteNullBulkString(ctx);
+                return;
+            }
+
+            WriteBulkString(ctx, Utf8.GetBytes(result.Value.Value.ToString("G17", CultureInfo.InvariantCulture)));
         }
 
         private async Task HandlePublishAsync(

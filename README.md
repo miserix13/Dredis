@@ -19,6 +19,7 @@ Currently implemented RESP commands and behavior:
 - Pub/Sub: `PUBLISH`, `SUBSCRIBE`, `UNSUBSCRIBE`, `PSUBSCRIBE`, `PUNSUBSCRIBE`
 - Transactions: `MULTI`, `EXEC`, `DISCARD`, `WATCH`, `UNWATCH`
 - JSON: `JSON.SET`, `JSON.GET`, `JSON.DEL`, `JSON.TYPE`, `JSON.STRLEN`, `JSON.ARRLEN`, `JSON.ARRAPPEND`, `JSON.ARRINDEX`, `JSON.ARRINSERT`, `JSON.ARRREM`, `JSON.ARRTRIM`, `JSON.MGET`
+- Vectors: `VSET`, `VGET`, `VDIM`, `VSIM` (metrics: `COSINE`, `DOT`, `L2`)
 
 Notes:
 
@@ -74,6 +75,7 @@ Notes:
 | Pub/Sub | Yes | `PUBLISH`, `SUBSCRIBE`, `UNSUBSCRIBE`, `PSUBSCRIBE`, `PUNSUBSCRIBE` |
 | Transactions | Yes | `MULTI`, `EXEC`, `DISCARD`, `WATCH`, `UNWATCH` with optimistic locking |
 | JSON | Yes | `JSON.SET`, `JSON.GET`, `JSON.DEL`, `JSON.TYPE`, `JSON.STRLEN`, `JSON.ARRLEN`, `JSON.ARRAPPEND`, `JSON.ARRINDEX`, `JSON.ARRINSERT`, `JSON.ARRREM`, `JSON.ARRTRIM`, `JSON.MGET` |
+| Vectors | Yes | `VSET`, `VGET`, `VDIM`, `VSIM` |
 
 ## Architecture
 
