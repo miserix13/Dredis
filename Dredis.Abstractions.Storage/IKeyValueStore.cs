@@ -2434,6 +2434,47 @@ namespace Dredis.Abstractions.Storage
             CancellationToken token = default);
 
         /// <summary>
+        /// Returns ranks (number of observations strictly less than each value).
+        /// </summary>
+        Task<ProbabilisticArrayResult> TDigestRankAsync(
+            string key,
+            double[] values,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Returns reverse ranks (number of observations strictly greater than each value).
+        /// </summary>
+        Task<ProbabilisticArrayResult> TDigestRevRankAsync(
+            string key,
+            double[] values,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Returns values by 0-based ranks.
+        /// </summary>
+        Task<ProbabilisticDoubleArrayResult> TDigestByRankAsync(
+            string key,
+            long[] ranks,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Returns values by reverse 0-based ranks.
+        /// </summary>
+        Task<ProbabilisticDoubleArrayResult> TDigestByRevRankAsync(
+            string key,
+            long[] ranks,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Returns mean of values between two quantile cutoffs.
+        /// </summary>
+        Task<ProbabilisticDoubleResult> TDigestTrimmedMeanAsync(
+            string key,
+            double lowerQuantile,
+            double upperQuantile,
+            CancellationToken token = default);
+
+        /// <summary>
         /// Returns minimum value from a t-digest sketch.
         /// </summary>
         Task<ProbabilisticDoubleResult> TDigestMinAsync(

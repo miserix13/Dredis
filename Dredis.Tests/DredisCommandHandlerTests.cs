@@ -1875,6 +1875,30 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        public async Task Cuckoo_Insert_ParsesOptionsAndReturnsArray()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("CF.INSERT", "cf:opt", "CAPACITY", "64", "ITEMS", "a", "b", "a"));
+                channel.RunPendingTasks();
+                var array = Assert.IsType<ArrayRedisMessage>(ReadOutbound(channel));
+                Assert.Equal(3, array.Children.Count);
+
+                channel.WriteInbound(Command("CF.COUNT", "cf:opt", "a"));
+                channel.RunPendingTasks();
+                var count = Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel));
+                Assert.Equal(2, count.Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
         public async Task TDigest_CreateAddQuantileMinMax_Workflow()
         {
             var store = new InMemoryKeyValueStore();
@@ -1906,6 +1930,43 @@ namespace Dredis.Tests
                 channel.RunPendingTasks();
                 var max = Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel));
                 Assert.Equal("5", GetBulkString(max));
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task TDigest_ParityCommands_RankByRankTrimmedMean()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("TDIGEST.CREATE", "td:parity"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("TDIGEST.ADD", "td:parity", "1", "2", "3", "4", "5"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("TDIGEST.RANK", "td:parity", "3"));
+                channel.RunPendingTasks();
+                var rank = Assert.IsType<ArrayRedisMessage>(ReadOutbound(channel));
+                Assert.Single(rank.Children);
+
+                channel.WriteInbound(Command("TDIGEST.BYRANK", "td:parity", "2"));
+                channel.RunPendingTasks();
+                var byRank = Assert.IsType<ArrayRedisMessage>(ReadOutbound(channel));
+                Assert.Single(byRank.Children);
+
+                channel.WriteInbound(Command("TDIGEST.TRIMMED_MEAN", "td:parity", "0.2", "0.8"));
+                channel.RunPendingTasks();
+                var tm = Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel));
+                Assert.NotNull(GetBulkString(tm));
             }
             finally
             {
@@ -5674,6 +5735,179 @@ namespace Dredis.Tests
             }
 
             return Task.FromResult(new ProbabilisticDoubleArrayResult(ProbabilisticResultStatus.Ok, output));
+        }
+
+        public Task<ProbabilisticArrayResult> TDigestRankAsync(string key, double[] values, CancellationToken token = default)
+        {
+            if (HasNonTDigestType(key))
+            {
+                return Task.FromResult(new ProbabilisticArrayResult(ProbabilisticResultStatus.WrongType, Array.Empty<long>()));
+            }
+
+            if (!_tdigest.TryGetValue(key, out var digest))
+            {
+                return Task.FromResult(new ProbabilisticArrayResult(ProbabilisticResultStatus.NotFound, Array.Empty<long>()));
+            }
+
+            var sorted = digest.Values.OrderBy(v => v).ToArray();
+            var output = new long[values.Length];
+            for (int i = 0; i < values.Length; i++)
+            {
+                var idx = Array.BinarySearch(sorted, values[i]);
+                if (idx < 0)
+                {
+                    idx = ~idx;
+                }
+                else
+                {
+                    while (idx > 0 && sorted[idx - 1] >= values[i])
+                    {
+                        idx--;
+                    }
+                }
+
+                output[i] = idx;
+            }
+
+            return Task.FromResult(new ProbabilisticArrayResult(ProbabilisticResultStatus.Ok, output));
+        }
+
+        public Task<ProbabilisticArrayResult> TDigestRevRankAsync(string key, double[] values, CancellationToken token = default)
+        {
+            if (HasNonTDigestType(key))
+            {
+                return Task.FromResult(new ProbabilisticArrayResult(ProbabilisticResultStatus.WrongType, Array.Empty<long>()));
+            }
+
+            if (!_tdigest.TryGetValue(key, out var digest))
+            {
+                return Task.FromResult(new ProbabilisticArrayResult(ProbabilisticResultStatus.NotFound, Array.Empty<long>()));
+            }
+
+            var sorted = digest.Values.OrderBy(v => v).ToArray();
+            var output = new long[values.Length];
+            for (int i = 0; i < values.Length; i++)
+            {
+                var idx = Array.BinarySearch(sorted, values[i]);
+                if (idx < 0)
+                {
+                    idx = ~idx;
+                }
+                else
+                {
+                    while (idx < sorted.Length && sorted[idx] <= values[i])
+                    {
+                        idx++;
+                    }
+                }
+
+                output[i] = sorted.Length - idx;
+            }
+
+            return Task.FromResult(new ProbabilisticArrayResult(ProbabilisticResultStatus.Ok, output));
+        }
+
+        public Task<ProbabilisticDoubleArrayResult> TDigestByRankAsync(string key, long[] ranks, CancellationToken token = default)
+        {
+            if (HasNonTDigestType(key))
+            {
+                return Task.FromResult(new ProbabilisticDoubleArrayResult(ProbabilisticResultStatus.WrongType, Array.Empty<double>()));
+            }
+
+            if (!_tdigest.TryGetValue(key, out var digest))
+            {
+                return Task.FromResult(new ProbabilisticDoubleArrayResult(ProbabilisticResultStatus.NotFound, Array.Empty<double>()));
+            }
+
+            var sorted = digest.Values.OrderBy(v => v).ToArray();
+            var output = new double[ranks.Length];
+            for (int i = 0; i < ranks.Length; i++)
+            {
+                var rank = ranks[i];
+                if (rank < 0 || rank >= sorted.Length)
+                {
+                    output[i] = double.NaN;
+                }
+                else
+                {
+                    output[i] = sorted[rank];
+                }
+            }
+
+            return Task.FromResult(new ProbabilisticDoubleArrayResult(ProbabilisticResultStatus.Ok, output));
+        }
+
+        public Task<ProbabilisticDoubleArrayResult> TDigestByRevRankAsync(string key, long[] ranks, CancellationToken token = default)
+        {
+            if (HasNonTDigestType(key))
+            {
+                return Task.FromResult(new ProbabilisticDoubleArrayResult(ProbabilisticResultStatus.WrongType, Array.Empty<double>()));
+            }
+
+            if (!_tdigest.TryGetValue(key, out var digest))
+            {
+                return Task.FromResult(new ProbabilisticDoubleArrayResult(ProbabilisticResultStatus.NotFound, Array.Empty<double>()));
+            }
+
+            var sorted = digest.Values.OrderBy(v => v).ToArray();
+            var output = new double[ranks.Length];
+            for (int i = 0; i < ranks.Length; i++)
+            {
+                var rank = ranks[i];
+                if (rank < 0 || rank >= sorted.Length)
+                {
+                    output[i] = double.NaN;
+                }
+                else
+                {
+                    output[i] = sorted[sorted.Length - 1 - rank];
+                }
+            }
+
+            return Task.FromResult(new ProbabilisticDoubleArrayResult(ProbabilisticResultStatus.Ok, output));
+        }
+
+        public Task<ProbabilisticDoubleResult> TDigestTrimmedMeanAsync(string key, double lowerQuantile, double upperQuantile, CancellationToken token = default)
+        {
+            if (HasNonTDigestType(key))
+            {
+                return Task.FromResult(new ProbabilisticDoubleResult(ProbabilisticResultStatus.WrongType, null));
+            }
+
+            if (!_tdigest.TryGetValue(key, out var digest))
+            {
+                return Task.FromResult(new ProbabilisticDoubleResult(ProbabilisticResultStatus.NotFound, null));
+            }
+
+            if (lowerQuantile < 0 || lowerQuantile > 1 || upperQuantile < 0 || upperQuantile > 1 || lowerQuantile > upperQuantile)
+            {
+                return Task.FromResult(new ProbabilisticDoubleResult(ProbabilisticResultStatus.InvalidArgument, null));
+            }
+
+            var sorted = digest.Values.OrderBy(v => v).ToArray();
+            if (sorted.Length == 0)
+            {
+                return Task.FromResult(new ProbabilisticDoubleResult(ProbabilisticResultStatus.Ok, double.NaN));
+            }
+
+            var start = (int)Math.Floor(lowerQuantile * (sorted.Length - 1));
+            var end = (int)Math.Ceiling(upperQuantile * (sorted.Length - 1));
+            start = Math.Clamp(start, 0, sorted.Length - 1);
+            end = Math.Clamp(end, 0, sorted.Length - 1);
+            if (end < start)
+            {
+                return Task.FromResult(new ProbabilisticDoubleResult(ProbabilisticResultStatus.Ok, double.NaN));
+            }
+
+            double sum = 0;
+            var count = 0;
+            for (int i = start; i <= end; i++)
+            {
+                sum += sorted[i];
+                count++;
+            }
+
+            return Task.FromResult(new ProbabilisticDoubleResult(ProbabilisticResultStatus.Ok, count == 0 ? double.NaN : sum / count));
         }
 
         public Task<ProbabilisticDoubleResult> TDigestMinAsync(string key, CancellationToken token = default)

@@ -994,6 +994,14 @@ namespace Dredis
                     await HandleCuckooAddAsync(ctx, elements, nx: true);
                     break;
 
+                case "CF.INSERT":
+                    await HandleCuckooInsertAsync(ctx, elements, nx: false);
+                    break;
+
+                case "CF.INSERTNX":
+                    await HandleCuckooInsertAsync(ctx, elements, nx: true);
+                    break;
+
                 case "CF.EXISTS":
                     await HandleCuckooExistsAsync(ctx, elements);
                     break;
@@ -1028,6 +1036,26 @@ namespace Dredis
 
                 case "TDIGEST.CDF":
                     await HandleTDigestCdfAsync(ctx, elements);
+                    break;
+
+                case "TDIGEST.RANK":
+                    await HandleTDigestRankAsync(ctx, elements, reverse: false);
+                    break;
+
+                case "TDIGEST.REVRANK":
+                    await HandleTDigestRankAsync(ctx, elements, reverse: true);
+                    break;
+
+                case "TDIGEST.BYRANK":
+                    await HandleTDigestByRankAsync(ctx, elements, reverse: false);
+                    break;
+
+                case "TDIGEST.BYREVRANK":
+                    await HandleTDigestByRankAsync(ctx, elements, reverse: true);
+                    break;
+
+                case "TDIGEST.TRIMMED_MEAN":
+                    await HandleTDigestTrimmedMeanAsync(ctx, elements);
                     break;
 
                 case "TDIGEST.MIN":
@@ -3374,7 +3402,7 @@ namespace Dredis
 
         private async Task HandleBloomInfoAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
         {
-            if (args.Count != 2)
+            if (args.Count != 2 && args.Count != 3)
             {
                 WriteError(ctx, "ERR wrong number of arguments for 'bf.info' command");
                 return;
@@ -3386,8 +3414,18 @@ namespace Dredis
                 return;
             }
 
+            string? field = null;
+            if (args.Count == 3)
+            {
+                if (!TryGetString(args[2], out field))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+            }
+
             var result = await _store.BloomInfoAsync(key).ConfigureAwait(false);
-            WriteProbabilisticInfo(ctx, result);
+            WriteProbabilisticInfo(ctx, result, field);
         }
 
         private async Task HandleCuckooReserveAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
@@ -3456,6 +3494,108 @@ namespace Dredis
 
             WriteInteger(ctx, result.Value ? 1 : 0);
             if (result.Value)
+            {
+                Transactions.NotifyKeyModified(key, _store);
+            }
+        }
+
+        private async Task HandleCuckooInsertAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args, bool nx)
+        {
+            var commandName = nx ? "cf.insertnx" : "cf.insert";
+            if (args.Count < 4)
+            {
+                WriteError(ctx, $"ERR wrong number of arguments for '{commandName}' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var index = 2;
+            var noCreate = false;
+            while (index < args.Count)
+            {
+                if (!TryGetString(args[index], out var token))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                if (token.Equals("NOCREATE", StringComparison.OrdinalIgnoreCase))
+                {
+                    noCreate = true;
+                    index++;
+                    continue;
+                }
+
+                if (token.Equals("CAPACITY", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (index + 1 >= args.Count || !TryGetString(args[index + 1], out var capText) || !long.TryParse(capText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var capacity))
+                    {
+                        WriteError(ctx, "ERR invalid arguments");
+                        return;
+                    }
+
+                    var reserveResult = await _store.CuckooReserveAsync(key, capacity).ConfigureAwait(false);
+                    if (reserveResult == ProbabilisticResultStatus.WrongType)
+                    {
+                        WriteError(ctx, "WRONGTYPE Probabilistic structure type mismatch");
+                        return;
+                    }
+
+                    index += 2;
+                    continue;
+                }
+
+                if (token.Equals("ITEMS", StringComparison.OrdinalIgnoreCase))
+                {
+                    index++;
+                    break;
+                }
+
+                WriteError(ctx, "ERR syntax error");
+                return;
+            }
+
+            if (index >= args.Count)
+            {
+                WriteError(ctx, $"ERR wrong number of arguments for '{commandName}' command");
+                return;
+            }
+
+            var resultValues = new long[args.Count - index];
+            for (int i = index; i < args.Count; i++)
+            {
+                if (!TryGetBytes(args[i], out var item))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                var result = nx
+                    ? await _store.CuckooAddNxAsync(key, item, noCreate).ConfigureAwait(false)
+                    : await _store.CuckooAddAsync(key, item, noCreate).ConfigureAwait(false);
+
+                if (result.Status == ProbabilisticResultStatus.WrongType)
+                {
+                    WriteError(ctx, "WRONGTYPE Probabilistic structure type mismatch");
+                    return;
+                }
+
+                if (result.Status == ProbabilisticResultStatus.NotFound)
+                {
+                    WriteError(ctx, "ERR not found");
+                    return;
+                }
+
+                resultValues[i - index] = result.Value ? 1 : 0;
+            }
+
+            WriteIntegerArray(ctx, resultValues);
+            if (resultValues.Any(v => v != 0))
             {
                 Transactions.NotifyKeyModified(key, _store);
             }
@@ -3539,7 +3679,7 @@ namespace Dredis
 
         private async Task HandleCuckooInfoAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
         {
-            if (args.Count != 2)
+            if (args.Count != 2 && args.Count != 3)
             {
                 WriteError(ctx, "ERR wrong number of arguments for 'cf.info' command");
                 return;
@@ -3551,8 +3691,18 @@ namespace Dredis
                 return;
             }
 
+            string? field = null;
+            if (args.Count == 3)
+            {
+                if (!TryGetString(args[2], out field))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+            }
+
             var result = await _store.CuckooInfoAsync(key).ConfigureAwait(false);
-            WriteProbabilisticInfo(ctx, result);
+            WriteProbabilisticInfo(ctx, result, field);
         }
 
         private async Task HandleTDigestCreateAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
@@ -3740,6 +3890,105 @@ namespace Dredis
 
             var result = await _store.TDigestCdfAsync(key, values).ConfigureAwait(false);
             WriteDoubleArrayResult(ctx, result);
+        }
+
+        private async Task HandleTDigestRankAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args, bool reverse)
+        {
+            var commandName = reverse ? "tdigest.revrank" : "tdigest.rank";
+            if (args.Count < 3)
+            {
+                WriteError(ctx, $"ERR wrong number of arguments for '{commandName}' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var values = new double[args.Count - 2];
+            for (int i = 2; i < args.Count; i++)
+            {
+                if (!TryGetString(args[i], out var valueText) || !double.TryParse(valueText, NumberStyles.Float, CultureInfo.InvariantCulture, out var value))
+                {
+                    WriteError(ctx, "ERR value is not a valid float");
+                    return;
+                }
+
+                values[i - 2] = value;
+            }
+
+            var result = reverse
+                ? await _store.TDigestRevRankAsync(key, values).ConfigureAwait(false)
+                : await _store.TDigestRankAsync(key, values).ConfigureAwait(false);
+
+            if (result.Status == ProbabilisticResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Probabilistic structure type mismatch");
+                return;
+            }
+
+            if (result.Status == ProbabilisticResultStatus.NotFound)
+            {
+                WriteError(ctx, "ERR key does not exist");
+                return;
+            }
+
+            WriteIntegerArray(ctx, result.Values);
+        }
+
+        private async Task HandleTDigestByRankAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args, bool reverse)
+        {
+            var commandName = reverse ? "tdigest.byrevrank" : "tdigest.byrank";
+            if (args.Count < 3)
+            {
+                WriteError(ctx, $"ERR wrong number of arguments for '{commandName}' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var ranks = new long[args.Count - 2];
+            for (int i = 2; i < args.Count; i++)
+            {
+                if (!TryGetString(args[i], out var rankText) || !long.TryParse(rankText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var rank))
+                {
+                    WriteError(ctx, "ERR value is not an integer or out of range");
+                    return;
+                }
+
+                ranks[i - 2] = rank;
+            }
+
+            var result = reverse
+                ? await _store.TDigestByRevRankAsync(key, ranks).ConfigureAwait(false)
+                : await _store.TDigestByRankAsync(key, ranks).ConfigureAwait(false);
+            WriteDoubleArrayResult(ctx, result);
+        }
+
+        private async Task HandleTDigestTrimmedMeanAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count != 4)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'tdigest.trimmed_mean' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key) ||
+                !TryGetString(args[2], out var lowText) || !double.TryParse(lowText, NumberStyles.Float, CultureInfo.InvariantCulture, out var low) ||
+                !TryGetString(args[3], out var highText) || !double.TryParse(highText, NumberStyles.Float, CultureInfo.InvariantCulture, out var high))
+            {
+                WriteError(ctx, "ERR invalid arguments");
+                return;
+            }
+
+            var result = await _store.TDigestTrimmedMeanAsync(key, low, high).ConfigureAwait(false);
+            WriteDoubleResult(ctx, result);
         }
 
         private async Task HandleTDigestMinAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
@@ -4051,7 +4300,7 @@ namespace Dredis
             WriteProbabilisticInfo(ctx, result);
         }
 
-        private void WriteProbabilisticInfo(IChannelHandlerContext ctx, ProbabilisticInfoResult result)
+        private void WriteProbabilisticInfo(IChannelHandlerContext ctx, ProbabilisticInfoResult result, string? onlyField = null)
         {
             if (result.Status == ProbabilisticResultStatus.WrongType)
             {
@@ -4062,6 +4311,19 @@ namespace Dredis
             if (result.Status == ProbabilisticResultStatus.NotFound)
             {
                 WriteError(ctx, "ERR key does not exist");
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(onlyField))
+            {
+                var field = result.Fields.FirstOrDefault(x => x.Key.Equals(onlyField, StringComparison.OrdinalIgnoreCase));
+                if (field.Equals(default(KeyValuePair<string, string>)))
+                {
+                    WriteError(ctx, "ERR invalid info argument");
+                    return;
+                }
+
+                WriteInteger(ctx, long.TryParse(field.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : 0);
                 return;
             }
 
@@ -4103,6 +4365,12 @@ namespace Dredis
             if (result.Status == ProbabilisticResultStatus.WrongType)
             {
                 WriteError(ctx, "WRONGTYPE Probabilistic structure type mismatch");
+                return;
+            }
+
+            if (result.Status == ProbabilisticResultStatus.InvalidArgument)
+            {
+                WriteError(ctx, "ERR invalid arguments");
                 return;
             }
 
