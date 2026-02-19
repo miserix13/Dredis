@@ -627,7 +627,8 @@ namespace Dredis
         {
             if (msg is IArrayRedisMessage array)
             {
-                _ = HandleCommandAsync(ctx, array);
+                array.Retain();
+                _ = HandleCommandSafeAsync(ctx, array);
             }
             else if (msg is InlineCommandRedisMessage inline)
             {
@@ -638,11 +639,30 @@ namespace Dredis
                     return;
                 }
 
-                _ = HandleCommandAsync(ctx, inlineArray);
+                _ = HandleCommandSafeAsync(ctx, inlineArray);
             }
             else
             {
                 WriteError(ctx, "ERR protocol error: expected array");
+            }
+        }
+
+        /// <summary>
+        /// Executes command handling and converts unexpected exceptions into Redis error replies.
+        /// </summary>
+        private async Task HandleCommandSafeAsync(IChannelHandlerContext ctx, IArrayRedisMessage array)
+        {
+            try
+            {
+                await HandleCommandAsync(ctx, array);
+            }
+            catch
+            {
+                WriteError(ctx, "ERR internal server error");
+            }
+            finally
+            {
+                array.Release();
             }
         }
 
@@ -698,6 +718,31 @@ namespace Dredis
 
             switch (cmd)
             {
+                case "CLIENT":
+                    await HandleClientAsync(ctx, elements);
+                    break;
+
+                case "COMMAND":
+                    await HandleCommandIntrospectionAsync(ctx, elements);
+                    break;
+
+                case "SELECT":
+                    await HandleSelectAsync(ctx, elements);
+                    break;
+
+                case "INFO":
+                    await HandleInfoAsync(ctx, elements);
+                    break;
+
+                case "CONFIG":
+                    await HandleConfigAsync(ctx, elements);
+                    break;
+
+                case "READONLY":
+                case "READWRITE":
+                    WriteSimpleString(ctx, "OK");
+                    break;
+
                 case "PING":
                     await HandlePingAsync(ctx, elements);
                     break;
@@ -1097,6 +1142,181 @@ namespace Dredis
         }
 
         /// <summary>
+        /// Handles the CLIENT command and common subcommands used by Redis clients.
+        /// </summary>
+        private Task HandleClientAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count < 2)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'client' command");
+                return Task.CompletedTask;
+            }
+
+            if (!TryGetString(args[1], out var subCommand))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return Task.CompletedTask;
+            }
+
+            switch (subCommand.ToUpperInvariant())
+            {
+                case "SETINFO":
+                    WriteSimpleString(ctx, "OK");
+                    return Task.CompletedTask;
+
+                case "SETNAME":
+                    if (args.Count != 3)
+                    {
+                        WriteError(ctx, "ERR wrong number of arguments for 'client|setname' command");
+                        return Task.CompletedTask;
+                    }
+
+                    WriteSimpleString(ctx, "OK");
+                    return Task.CompletedTask;
+
+                case "GETNAME":
+                    if (args.Count != 2)
+                    {
+                        WriteError(ctx, "ERR wrong number of arguments for 'client|getname' command");
+                        return Task.CompletedTask;
+                    }
+
+                    WriteNullBulkString(ctx);
+                    return Task.CompletedTask;
+
+                case "ID":
+                    if (args.Count != 2)
+                    {
+                        WriteError(ctx, "ERR wrong number of arguments for 'client|id' command");
+                        return Task.CompletedTask;
+                    }
+
+                    WriteInteger(ctx, 1);
+                    return Task.CompletedTask;
+
+                default:
+                    WriteError(ctx, $"ERR unknown subcommand '{subCommand}' for client");
+                    return Task.CompletedTask;
+            }
+        }
+
+        /// <summary>
+        /// Handles the COMMAND command family for client capability probing.
+        /// </summary>
+        private Task HandleCommandIntrospectionAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count == 1)
+            {
+                WriteArray(ctx, Array.Empty<IRedisMessage>());
+                return Task.CompletedTask;
+            }
+
+            if (!TryGetString(args[1], out var subCommand))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return Task.CompletedTask;
+            }
+
+            switch (subCommand.ToUpperInvariant())
+            {
+                case "COUNT":
+                    WriteInteger(ctx, 0);
+                    return Task.CompletedTask;
+
+                case "INFO":
+                    var children = new List<IRedisMessage>();
+                    for (var i = 2; i < args.Count; i++)
+                    {
+                        children.Add(FullBulkStringRedisMessage.Null);
+                    }
+
+                    WriteArray(ctx, children);
+                    return Task.CompletedTask;
+
+                default:
+                    WriteArray(ctx, Array.Empty<IRedisMessage>());
+                    return Task.CompletedTask;
+            }
+        }
+
+        /// <summary>
+        /// Handles SELECT and accepts logical database 0.
+        /// </summary>
+        private Task HandleSelectAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count != 2)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'select' command");
+                return Task.CompletedTask;
+            }
+
+            if (!TryGetString(args[1], out var dbText) || !int.TryParse(dbText, NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
+            {
+                WriteError(ctx, "ERR invalid DB index");
+                return Task.CompletedTask;
+            }
+
+            WriteSimpleString(ctx, "OK");
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Handles INFO with a minimal server info payload.
+        /// </summary>
+        private Task HandleInfoAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count > 2)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'info' command");
+                return Task.CompletedTask;
+            }
+
+            var payload = "# Server\r\nredis_version:7.2.0\r\n# Clients\r\nconnected_clients:1\r\n";
+            WriteBulkString(ctx, Utf8.GetBytes(payload));
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Handles CONFIG GET with minimal known values.
+        /// </summary>
+        private Task HandleConfigAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count < 2)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'config' command");
+                return Task.CompletedTask;
+            }
+
+            if (!TryGetString(args[1], out var subCommand))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return Task.CompletedTask;
+            }
+
+            if (!string.Equals(subCommand, "GET", StringComparison.OrdinalIgnoreCase))
+            {
+                WriteError(ctx, $"ERR unknown subcommand '{subCommand}' for config");
+                return Task.CompletedTask;
+            }
+
+            if (args.Count != 3 || !TryGetString(args[2], out var keyPattern))
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'config|get' command");
+                return Task.CompletedTask;
+            }
+
+            var reply = new List<IRedisMessage>();
+            if (string.Equals(keyPattern, "timeout", StringComparison.OrdinalIgnoreCase) || keyPattern == "*")
+            {
+                reply.Add(BulkString("timeout"));
+                reply.Add(BulkString("0"));
+            }
+
+            WriteArray(ctx, reply);
+            return Task.CompletedTask;
+        }
+
+        /// <summary>
         /// Handles the GET command.
         /// </summary>
         private async Task HandleGetAsync(
@@ -1118,6 +1338,12 @@ namespace Dredis
 
             if (value == null)
             {
+                if (string.Equals(key, "__Booksleeve_TieBreak", StringComparison.Ordinal))
+                {
+                    WriteBulkString(ctx, Array.Empty<byte>());
+                    return;
+                }
+
                 WriteNullBulkString(ctx);
             }
             else

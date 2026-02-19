@@ -11,7 +11,7 @@ namespace Dredis.Tests
     /// </summary>
     public sealed class DredisNRedisCompatibilityTests
     {
-        [Fact(Skip = "Known compatibility gap: StackExchange.Redis/NRedisStack handshake is not yet fully supported")]
+        [Fact]
         /// <summary>
         /// Verifies basic string and counter commands work through the client connection.
         /// </summary>
@@ -76,8 +76,6 @@ namespace Dredis.Tests
                 Protocol = RedisProtocol.Resp2,
                 SyncTimeout = 2000
             };
-
-            options.CommandMap = CommandMap.Create(new HashSet<string> { "ECHO" }, available: false);
 
             options.EndPoints.Add(IPAddress.Loopback, port);
             return await ConnectionMultiplexer.ConnectAsync(options);
