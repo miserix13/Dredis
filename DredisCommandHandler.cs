@@ -1150,6 +1150,10 @@ namespace Dredis
                     await HandleTimeSeriesMultiRangeAsync(ctx, elements, reverse: false);
                     break;
 
+                case "TS.MREVRANGE":
+                    await HandleTimeSeriesMultiRangeAsync(ctx, elements, reverse: true);
+                    break;
+
                 case "TS.REVRANGE":
                     await HandleTimeSeriesRangeAsync(ctx, elements, reverse: true);
                     break;

@@ -2737,6 +2737,60 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        public async Task TimeSeries_LabelsAndMultiRevRange_FilterByLabelsAndReverseOrder()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("TS.CREATE", "ts:cpu:a", "LABELS", "host", "a", "region", "west"));
+                channel.RunPendingTasks();
+                _ = Assert.IsType<SimpleStringRedisMessage>(ReadOutbound(channel));
+
+                channel.WriteInbound(Command("TS.CREATE", "ts:cpu:b", "LABELS", "host", "b", "region", "west"));
+                channel.RunPendingTasks();
+                _ = Assert.IsType<SimpleStringRedisMessage>(ReadOutbound(channel));
+
+                channel.WriteInbound(Command("TS.ADD", "ts:cpu:a", "1000", "1"));
+                channel.RunPendingTasks();
+                _ = Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel));
+
+                channel.WriteInbound(Command("TS.ADD", "ts:cpu:a", "2000", "3"));
+                channel.RunPendingTasks();
+                _ = Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel));
+
+                channel.WriteInbound(Command("TS.ADD", "ts:cpu:b", "1000", "2"));
+                channel.RunPendingTasks();
+                _ = Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel));
+
+                channel.WriteInbound(Command("TS.MREVRANGE", "-", "+", "FILTER", "region=west", "host=a"));
+                channel.RunPendingTasks();
+                var mrevrange = Assert.IsType<ArrayRedisMessage>(ReadOutbound(channel));
+                Assert.Single(mrevrange.Children);
+
+                var entry = Assert.IsType<ArrayRedisMessage>(mrevrange.Children[0]);
+                Assert.Equal("ts:cpu:a", GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(entry.Children[0])));
+
+                var samples = Assert.IsType<ArrayRedisMessage>(entry.Children[2]);
+                Assert.Equal(2, samples.Children.Count);
+
+                var first = Assert.IsType<ArrayRedisMessage>(samples.Children[0]);
+                var second = Assert.IsType<ArrayRedisMessage>(samples.Children[1]);
+
+                Assert.Equal(2000, Assert.IsType<IntegerRedisMessage>(first.Children[0]).Value);
+                Assert.Equal("3", GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(first.Children[1])));
+
+                Assert.Equal(1000, Assert.IsType<IntegerRedisMessage>(second.Children[0]).Value);
+                Assert.Equal("1", GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(second.Children[1])));
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
         public async Task Publish_NoSubscribers_ReturnsZero()
         {
             DredisCommandHandler.PubSubManager.Clear();
