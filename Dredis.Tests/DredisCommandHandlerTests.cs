@@ -2421,7 +2421,7 @@ namespace Dredis.Tests
                 channel.RunPendingTasks();
                 var execResponse = ReadOutbound(channel);
                 var execArray = Assert.IsType<ArrayRedisMessage>(execResponse);
-                Assert.Equal(1, execArray.Children.Count);
+                Assert.Single(execArray.Children);
             }
             finally
             {

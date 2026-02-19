@@ -4297,6 +4297,37 @@ namespace Dredis
             return false;
         }
 
+        private static bool TryConsumeNamedNonNegativeLongOption(
+            IList<IRedisMessage> args,
+            ref int index,
+            string option,
+            string errorMessage,
+            out long value,
+            out string error)
+        {
+            value = 0;
+            error = string.Empty;
+
+            if (index >= args.Count ||
+                !TryGetString(args[index], out var token) ||
+                !token.Equals(option, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (index + 1 >= args.Count ||
+                !TryGetString(args[index + 1], out var raw) ||
+                !long.TryParse(raw, out var parsed) || parsed < 0)
+            {
+                error = errorMessage;
+                return false;
+            }
+
+            value = parsed;
+            index += 2;
+            return true;
+        }
+
         /// <summary>
         /// Handles the XACK command.
         /// </summary>
@@ -4379,15 +4410,19 @@ namespace Dredis
             if (argIndex < args.Count && TryGetString(args[argIndex], out var idleArg) &&
                 idleArg.Equals("IDLE", StringComparison.OrdinalIgnoreCase))
             {
-                argIndex++;
-                if (argIndex >= args.Count || !TryGetString(args[argIndex], out var idleStr) ||
-                    !long.TryParse(idleStr, out var idleValue))
+                if (!TryConsumeNamedNonNegativeLongOption(
+                    args,
+                    ref argIndex,
+                    "IDLE",
+                    "ERR invalid idle time",
+                    out var idleValue,
+                    out var idleError))
                 {
-                    WriteError(ctx, "ERR invalid idle time");
+                    WriteError(ctx, idleError);
                     return;
                 }
+
                 minIdleTimeMs = idleValue;
-                argIndex++;
             }
 
             // Check for extended form (start end count)
@@ -4546,39 +4581,51 @@ namespace Dredis
                 var upperArg = arg.ToUpperInvariant();
                 if (upperArg == "IDLE")
                 {
-                    i++;
-                    if (i >= args.Count || !TryGetString(args[i], out var idleStr) ||
-                        !long.TryParse(idleStr, out var idleValue) || idleValue < 0)
+                    if (!TryConsumeNamedNonNegativeLongOption(
+                        args,
+                        ref i,
+                        "IDLE",
+                        "ERR invalid IDLE option",
+                        out var idleValue,
+                        out var idleError))
                     {
-                        WriteError(ctx, "ERR invalid IDLE option");
+                        WriteError(ctx, idleError);
                         return;
                     }
+
                     idleMs = idleValue;
-                    i++;
                 }
                 else if (upperArg == "TIME")
                 {
-                    i++;
-                    if (i >= args.Count || !TryGetString(args[i], out var timeStr) ||
-                        !long.TryParse(timeStr, out var timeValue) || timeValue < 0)
+                    if (!TryConsumeNamedNonNegativeLongOption(
+                        args,
+                        ref i,
+                        "TIME",
+                        "ERR invalid TIME option",
+                        out var timeValue,
+                        out var timeError))
                     {
-                        WriteError(ctx, "ERR invalid TIME option");
+                        WriteError(ctx, timeError);
                         return;
                     }
+
                     timeMs = timeValue;
-                    i++;
                 }
                 else if (upperArg == "RETRYCOUNT")
                 {
-                    i++;
-                    if (i >= args.Count || !TryGetString(args[i], out var retryStr) ||
-                        !long.TryParse(retryStr, out var retryValue) || retryValue < 0)
+                    if (!TryConsumeNamedNonNegativeLongOption(
+                        args,
+                        ref i,
+                        "RETRYCOUNT",
+                        "ERR invalid RETRYCOUNT option",
+                        out var retryValue,
+                        out var retryError))
                     {
-                        WriteError(ctx, "ERR invalid RETRYCOUNT option");
+                        WriteError(ctx, retryError);
                         return;
                     }
+
                     retryCount = retryValue;
-                    i++;
                 }
                 else if (upperArg == "FORCE")
                 {
