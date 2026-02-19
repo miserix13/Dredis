@@ -1011,6 +1011,186 @@ namespace Dredis.Abstractions.Storage
     }
 
     /// <summary>
+    /// Describes common results for probabilistic sketch operations.
+    /// </summary>
+    public enum ProbabilisticResultStatus
+    {
+        Ok,
+        WrongType,
+        NotFound,
+        Exists,
+        InvalidArgument
+    }
+
+    /// <summary>
+    /// Represents a generic count result for probabilistic operations.
+    /// </summary>
+    public sealed class ProbabilisticCountResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ProbabilisticCountResult"/> class.
+        /// </summary>
+        public ProbabilisticCountResult(ProbabilisticResultStatus status, long count)
+        {
+            Status = status;
+            Count = count;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public ProbabilisticResultStatus Status { get; }
+        /// <summary>
+        /// Gets the count value.
+        /// </summary>
+        public long Count { get; }
+    }
+
+    /// <summary>
+    /// Represents a generic boolean result for probabilistic operations.
+    /// </summary>
+    public sealed class ProbabilisticBoolResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ProbabilisticBoolResult"/> class.
+        /// </summary>
+        public ProbabilisticBoolResult(ProbabilisticResultStatus status, bool value)
+        {
+            Status = status;
+            Value = value;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public ProbabilisticResultStatus Status { get; }
+        /// <summary>
+        /// Gets the boolean result value.
+        /// </summary>
+        public bool Value { get; }
+    }
+
+    /// <summary>
+    /// Represents an array result for probabilistic operations.
+    /// </summary>
+    public sealed class ProbabilisticArrayResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ProbabilisticArrayResult"/> class.
+        /// </summary>
+        public ProbabilisticArrayResult(ProbabilisticResultStatus status, long[] values)
+        {
+            Status = status;
+            Values = values;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public ProbabilisticResultStatus Status { get; }
+        /// <summary>
+        /// Gets result values.
+        /// </summary>
+        public long[] Values { get; }
+    }
+
+    /// <summary>
+    /// Represents a floating-point array result for probabilistic operations.
+    /// </summary>
+    public sealed class ProbabilisticDoubleArrayResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ProbabilisticDoubleArrayResult"/> class.
+        /// </summary>
+        public ProbabilisticDoubleArrayResult(ProbabilisticResultStatus status, double[] values)
+        {
+            Status = status;
+            Values = values;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public ProbabilisticResultStatus Status { get; }
+        /// <summary>
+        /// Gets result values.
+        /// </summary>
+        public double[] Values { get; }
+    }
+
+    /// <summary>
+    /// Represents a scalar floating-point result for probabilistic operations.
+    /// </summary>
+    public sealed class ProbabilisticDoubleResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ProbabilisticDoubleResult"/> class.
+        /// </summary>
+        public ProbabilisticDoubleResult(ProbabilisticResultStatus status, double? value)
+        {
+            Status = status;
+            Value = value;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public ProbabilisticResultStatus Status { get; }
+        /// <summary>
+        /// Gets result value.
+        /// </summary>
+        public double? Value { get; }
+    }
+
+    /// <summary>
+    /// Represents string-array result for probabilistic operations.
+    /// </summary>
+    public sealed class ProbabilisticStringArrayResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ProbabilisticStringArrayResult"/> class.
+        /// </summary>
+        public ProbabilisticStringArrayResult(ProbabilisticResultStatus status, string?[] values)
+        {
+            Status = status;
+            Values = values;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public ProbabilisticResultStatus Status { get; }
+        /// <summary>
+        /// Gets string results.
+        /// </summary>
+        public string?[] Values { get; }
+    }
+
+    /// <summary>
+    /// Represents info result for probabilistic structures.
+    /// </summary>
+    public sealed class ProbabilisticInfoResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ProbabilisticInfoResult"/> class.
+        /// </summary>
+        public ProbabilisticInfoResult(ProbabilisticResultStatus status, KeyValuePair<string, string>[] fields)
+        {
+            Status = status;
+            Fields = fields;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public ProbabilisticResultStatus Status { get; }
+        /// <summary>
+        /// Gets key/value fields describing the sketch.
+        /// </summary>
+        public KeyValuePair<string, string>[] Fields { get; }
+    }
+
+    /// <summary>
     /// Describes results of vector operations.
     /// </summary>
     public enum VectorResultStatus
@@ -2107,6 +2287,229 @@ namespace Dredis.Abstractions.Storage
         Task<HyperLogLogMergeResult> HyperLogLogMergeAsync(
             string destinationKey,
             string[] sourceKeys,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Reserves a Bloom filter at key with error rate and capacity.
+        /// </summary>
+        Task<ProbabilisticResultStatus> BloomReserveAsync(
+            string key,
+            double errorRate,
+            long capacity,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Adds one element to a Bloom filter.
+        /// </summary>
+        Task<ProbabilisticBoolResult> BloomAddAsync(
+            string key,
+            byte[] element,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Adds multiple elements to a Bloom filter.
+        /// </summary>
+        Task<ProbabilisticArrayResult> BloomMAddAsync(
+            string key,
+            byte[][] elements,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Checks whether an element exists in a Bloom filter.
+        /// </summary>
+        Task<ProbabilisticBoolResult> BloomExistsAsync(
+            string key,
+            byte[] element,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Checks whether multiple elements exist in a Bloom filter.
+        /// </summary>
+        Task<ProbabilisticArrayResult> BloomMExistsAsync(
+            string key,
+            byte[][] elements,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Returns info fields for a Bloom filter.
+        /// </summary>
+        Task<ProbabilisticInfoResult> BloomInfoAsync(
+            string key,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Reserves a Cuckoo filter at key with capacity.
+        /// </summary>
+        Task<ProbabilisticResultStatus> CuckooReserveAsync(
+            string key,
+            long capacity,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Adds an item to a Cuckoo filter.
+        /// </summary>
+        Task<ProbabilisticBoolResult> CuckooAddAsync(
+            string key,
+            byte[] item,
+            bool noCreate,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Adds an item only if it does not already exist in a Cuckoo filter.
+        /// </summary>
+        Task<ProbabilisticBoolResult> CuckooAddNxAsync(
+            string key,
+            byte[] item,
+            bool noCreate,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Checks whether an item exists in a Cuckoo filter.
+        /// </summary>
+        Task<ProbabilisticBoolResult> CuckooExistsAsync(
+            string key,
+            byte[] item,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Deletes one occurrence of an item from a Cuckoo filter.
+        /// </summary>
+        Task<ProbabilisticBoolResult> CuckooDeleteAsync(
+            string key,
+            byte[] item,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Returns the count of an item in a Cuckoo filter.
+        /// </summary>
+        Task<ProbabilisticCountResult> CuckooCountAsync(
+            string key,
+            byte[] item,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Returns info fields for a Cuckoo filter.
+        /// </summary>
+        Task<ProbabilisticInfoResult> CuckooInfoAsync(
+            string key,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Creates a t-digest sketch.
+        /// </summary>
+        Task<ProbabilisticResultStatus> TDigestCreateAsync(
+            string key,
+            int compression,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Resets a t-digest sketch.
+        /// </summary>
+        Task<ProbabilisticResultStatus> TDigestResetAsync(
+            string key,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Adds one or more values to a t-digest sketch.
+        /// </summary>
+        Task<ProbabilisticResultStatus> TDigestAddAsync(
+            string key,
+            double[] values,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Returns quantiles for the provided fractions.
+        /// </summary>
+        Task<ProbabilisticDoubleArrayResult> TDigestQuantileAsync(
+            string key,
+            double[] quantiles,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Returns CDF values for the provided points.
+        /// </summary>
+        Task<ProbabilisticDoubleArrayResult> TDigestCdfAsync(
+            string key,
+            double[] values,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Returns minimum value from a t-digest sketch.
+        /// </summary>
+        Task<ProbabilisticDoubleResult> TDigestMinAsync(
+            string key,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Returns maximum value from a t-digest sketch.
+        /// </summary>
+        Task<ProbabilisticDoubleResult> TDigestMaxAsync(
+            string key,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Returns info fields for a t-digest sketch.
+        /// </summary>
+        Task<ProbabilisticInfoResult> TDigestInfoAsync(
+            string key,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Reserves a Top-K sketch.
+        /// </summary>
+        Task<ProbabilisticResultStatus> TopKReserveAsync(
+            string key,
+            int k,
+            int width,
+            int depth,
+            double decay,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Adds one or more items to a Top-K sketch and returns dropped items.
+        /// </summary>
+        Task<ProbabilisticStringArrayResult> TopKAddAsync(
+            string key,
+            byte[][] items,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Increments one or more items in a Top-K sketch and returns dropped items.
+        /// </summary>
+        Task<ProbabilisticStringArrayResult> TopKIncrByAsync(
+            string key,
+            KeyValuePair<byte[], long>[] increments,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Queries whether items are currently in Top-K.
+        /// </summary>
+        Task<ProbabilisticArrayResult> TopKQueryAsync(
+            string key,
+            byte[][] items,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Returns estimated counts for items in Top-K.
+        /// </summary>
+        Task<ProbabilisticArrayResult> TopKCountAsync(
+            string key,
+            byte[][] items,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Lists items currently in Top-K, with optional counts.
+        /// </summary>
+        Task<ProbabilisticStringArrayResult> TopKListAsync(
+            string key,
+            bool withCount,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Returns info fields for a Top-K sketch.
+        /// </summary>
+        Task<ProbabilisticInfoResult> TopKInfoAsync(
+            string key,
             CancellationToken token = default);
 
         /// <summary>

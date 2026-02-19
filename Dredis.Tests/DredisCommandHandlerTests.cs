@@ -1802,6 +1802,157 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        public async Task Bloom_ReserveAddExistsAndInfo_Workflow()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("BF.RESERVE", "bf:1", "0.01", "1000"));
+                channel.RunPendingTasks();
+                var reserve = Assert.IsType<SimpleStringRedisMessage>(ReadOutbound(channel));
+                Assert.Equal("OK", reserve.Content);
+
+                channel.WriteInbound(Command("BF.ADD", "bf:1", "alpha"));
+                channel.RunPendingTasks();
+                var added = Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel));
+                Assert.Equal(1, added.Value);
+
+                channel.WriteInbound(Command("BF.EXISTS", "bf:1", "alpha"));
+                channel.RunPendingTasks();
+                var exists = Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel));
+                Assert.Equal(1, exists.Value);
+
+                channel.WriteInbound(Command("BF.INFO", "bf:1"));
+                channel.RunPendingTasks();
+                var info = Assert.IsType<ArrayRedisMessage>(ReadOutbound(channel));
+                Assert.True(info.Children.Count >= 10);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task Cuckoo_ReserveAddNxCountDel_Workflow()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("CF.RESERVE", "cf:1", "128"));
+                channel.RunPendingTasks();
+                var reserve = Assert.IsType<SimpleStringRedisMessage>(ReadOutbound(channel));
+                Assert.Equal("OK", reserve.Content);
+
+                channel.WriteInbound(Command("CF.ADDNX", "cf:1", "beta"));
+                channel.RunPendingTasks();
+                var addNx = Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel));
+                Assert.Equal(1, addNx.Value);
+
+                channel.WriteInbound(Command("CF.ADDNX", "cf:1", "beta"));
+                channel.RunPendingTasks();
+                var addNxAgain = Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel));
+                Assert.Equal(0, addNxAgain.Value);
+
+                channel.WriteInbound(Command("CF.COUNT", "cf:1", "beta"));
+                channel.RunPendingTasks();
+                var count = Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel));
+                Assert.Equal(1, count.Value);
+
+                channel.WriteInbound(Command("CF.DEL", "cf:1", "beta"));
+                channel.RunPendingTasks();
+                var del = Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel));
+                Assert.Equal(1, del.Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task TDigest_CreateAddQuantileMinMax_Workflow()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("TDIGEST.CREATE", "td:1", "COMPRESSION", "100"));
+                channel.RunPendingTasks();
+                var created = Assert.IsType<SimpleStringRedisMessage>(ReadOutbound(channel));
+                Assert.Equal("OK", created.Content);
+
+                channel.WriteInbound(Command("TDIGEST.ADD", "td:1", "1", "2", "3", "4", "5"));
+                channel.RunPendingTasks();
+                var added = Assert.IsType<SimpleStringRedisMessage>(ReadOutbound(channel));
+                Assert.Equal("OK", added.Content);
+
+                channel.WriteInbound(Command("TDIGEST.QUANTILE", "td:1", "0.5"));
+                channel.RunPendingTasks();
+                var q = Assert.IsType<ArrayRedisMessage>(ReadOutbound(channel));
+                Assert.Single(q.Children);
+
+                channel.WriteInbound(Command("TDIGEST.MIN", "td:1"));
+                channel.RunPendingTasks();
+                var min = Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel));
+                Assert.Equal("1", GetBulkString(min));
+
+                channel.WriteInbound(Command("TDIGEST.MAX", "td:1"));
+                channel.RunPendingTasks();
+                var max = Assert.IsType<FullBulkStringRedisMessage>(ReadOutbound(channel));
+                Assert.Equal("5", GetBulkString(max));
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task TopK_ReserveAddQueryCountList_Workflow()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("TOPK.RESERVE", "topk:1", "2"));
+                channel.RunPendingTasks();
+                var reserve = Assert.IsType<SimpleStringRedisMessage>(ReadOutbound(channel));
+                Assert.Equal("OK", reserve.Content);
+
+                channel.WriteInbound(Command("TOPK.ADD", "topk:1", "a", "b", "a", "c"));
+                channel.RunPendingTasks();
+                var add = Assert.IsType<ArrayRedisMessage>(ReadOutbound(channel));
+                Assert.Equal(4, add.Children.Count);
+
+                channel.WriteInbound(Command("TOPK.QUERY", "topk:1", "a", "b", "c"));
+                channel.RunPendingTasks();
+                var query = Assert.IsType<ArrayRedisMessage>(ReadOutbound(channel));
+                Assert.Equal(3, query.Children.Count);
+
+                channel.WriteInbound(Command("TOPK.COUNT", "topk:1", "a", "b", "c"));
+                channel.RunPendingTasks();
+                var count = Assert.IsType<ArrayRedisMessage>(ReadOutbound(channel));
+                Assert.Equal(3, count.Children.Count);
+
+                channel.WriteInbound(Command("TOPK.LIST", "topk:1", "WITHCOUNT"));
+                channel.RunPendingTasks();
+                var list = Assert.IsType<ArrayRedisMessage>(ReadOutbound(channel));
+                Assert.True(list.Children.Count >= 2);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
         public async Task Vector_SetGetDim_RoundTrip()
         {
             var store = new InMemoryKeyValueStore();
@@ -4075,6 +4226,10 @@ namespace Dredis.Tests
         private readonly Dictionary<string, List<StreamEntryModel>> _streams = new(StringComparer.Ordinal);
         private readonly Dictionary<string, StreamId> _streamLastIds = new(StringComparer.Ordinal);
         private readonly Dictionary<string, Dictionary<string, StreamGroupState>> _streamGroups = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, BloomSketchModel> _bloom = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, CuckooSketchModel> _cuckoo = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, TDigestSketchModel> _tdigest = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, TopKSketchModel> _topk = new(StringComparer.Ordinal);
         private readonly Dictionary<string, DateTimeOffset?> _expirations = new(StringComparer.Ordinal);
         private static readonly Encoding Utf8 = new UTF8Encoding(false);
         private static readonly byte[] HyperLogLogMagic = Encoding.ASCII.GetBytes("DHLL");
@@ -4159,6 +4314,62 @@ namespace Dredis.Tests
             public double Score { get; set; }
         }
 
+        private sealed class BloomSketchModel
+        {
+            public BloomSketchModel(double errorRate, long capacity)
+            {
+                ErrorRate = errorRate;
+                Capacity = capacity;
+                Members = new HashSet<string>(StringComparer.Ordinal);
+            }
+
+            public double ErrorRate { get; }
+            public long Capacity { get; }
+            public HashSet<string> Members { get; }
+        }
+
+        private sealed class CuckooSketchModel
+        {
+            public CuckooSketchModel(long capacity)
+            {
+                Capacity = capacity;
+                Members = new Dictionary<string, long>(StringComparer.Ordinal);
+            }
+
+            public long Capacity { get; }
+            public Dictionary<string, long> Members { get; }
+        }
+
+        private sealed class TDigestSketchModel
+        {
+            public TDigestSketchModel(int compression)
+            {
+                Compression = compression;
+                Values = new List<double>();
+            }
+
+            public int Compression { get; }
+            public List<double> Values { get; }
+        }
+
+        private sealed class TopKSketchModel
+        {
+            public TopKSketchModel(int k, int width, int depth, double decay)
+            {
+                K = k;
+                Width = width;
+                Depth = depth;
+                Decay = decay;
+                Counts = new Dictionary<string, long>(StringComparer.Ordinal);
+            }
+
+            public int K { get; }
+            public int Width { get; }
+            public int Depth { get; }
+            public double Decay { get; }
+            public Dictionary<string, long> Counts { get; }
+        }
+
         /// <summary>
         /// Represents a parsed stream id for comparison.
         /// </summary>
@@ -4200,6 +4411,10 @@ namespace Dredis.Tests
             _streams.Remove(key);
             _streamLastIds.Remove(key);
             _streamGroups.Remove(key);
+            _bloom.Remove(key);
+            _cuckoo.Remove(key);
+            _tdigest.Remove(key);
+            _topk.Remove(key);
             _expirations.Remove(key);
         }
 
@@ -4242,6 +4457,10 @@ namespace Dredis.Tests
             _streams.Remove(key);
             _streamLastIds.Remove(key);
             _streamGroups.Remove(key);
+            _bloom.Remove(key);
+            _cuckoo.Remove(key);
+            _tdigest.Remove(key);
+            _topk.Remove(key);
 
             if (expiration.HasValue)
             {
@@ -4285,6 +4504,10 @@ namespace Dredis.Tests
                 _streams.Remove(item.Key);
                 _streamLastIds.Remove(item.Key);
                 _streamGroups.Remove(item.Key);
+                _bloom.Remove(item.Key);
+                _cuckoo.Remove(item.Key);
+                _tdigest.Remove(item.Key);
+                _topk.Remove(item.Key);
                 _expirations.Remove(item.Key);
             }
 
@@ -5022,6 +5245,650 @@ namespace Dredis.Tests
 
             _data[destinationKey] = EncodeHyperLogLog(mergedRegisters);
             return Task.FromResult(new HyperLogLogMergeResult(HyperLogLogResultStatus.Ok));
+        }
+
+        public Task<ProbabilisticResultStatus> BloomReserveAsync(string key, double errorRate, long capacity, CancellationToken token = default)
+        {
+            if (errorRate <= 0 || errorRate >= 1 || capacity <= 0)
+            {
+                return Task.FromResult(ProbabilisticResultStatus.InvalidArgument);
+            }
+
+            if (_bloom.ContainsKey(key))
+            {
+                return Task.FromResult(ProbabilisticResultStatus.Exists);
+            }
+
+            if (HasNonBloomType(key))
+            {
+                return Task.FromResult(ProbabilisticResultStatus.WrongType);
+            }
+
+            _bloom[key] = new BloomSketchModel(errorRate, capacity);
+            _data.Remove(key);
+            return Task.FromResult(ProbabilisticResultStatus.Ok);
+        }
+
+        public Task<ProbabilisticBoolResult> BloomAddAsync(string key, byte[] element, CancellationToken token = default)
+        {
+            if (HasNonBloomType(key))
+            {
+                return Task.FromResult(new ProbabilisticBoolResult(ProbabilisticResultStatus.WrongType, false));
+            }
+
+            if (!_bloom.TryGetValue(key, out var bloom))
+            {
+                bloom = new BloomSketchModel(0.01, 100);
+                _bloom[key] = bloom;
+                _data.Remove(key);
+            }
+
+            var added = bloom.Members.Add(Convert.ToBase64String(element));
+            return Task.FromResult(new ProbabilisticBoolResult(ProbabilisticResultStatus.Ok, added));
+        }
+
+        public Task<ProbabilisticArrayResult> BloomMAddAsync(string key, byte[][] elements, CancellationToken token = default)
+        {
+            if (HasNonBloomType(key))
+            {
+                return Task.FromResult(new ProbabilisticArrayResult(ProbabilisticResultStatus.WrongType, Array.Empty<long>()));
+            }
+
+            if (!_bloom.TryGetValue(key, out var bloom))
+            {
+                bloom = new BloomSketchModel(0.01, 100);
+                _bloom[key] = bloom;
+                _data.Remove(key);
+            }
+
+            var result = new long[elements.Length];
+            for (int i = 0; i < elements.Length; i++)
+            {
+                result[i] = bloom.Members.Add(Convert.ToBase64String(elements[i])) ? 1 : 0;
+            }
+
+            return Task.FromResult(new ProbabilisticArrayResult(ProbabilisticResultStatus.Ok, result));
+        }
+
+        public Task<ProbabilisticBoolResult> BloomExistsAsync(string key, byte[] element, CancellationToken token = default)
+        {
+            if (HasNonBloomType(key))
+            {
+                return Task.FromResult(new ProbabilisticBoolResult(ProbabilisticResultStatus.WrongType, false));
+            }
+
+            if (!_bloom.TryGetValue(key, out var bloom))
+            {
+                return Task.FromResult(new ProbabilisticBoolResult(ProbabilisticResultStatus.Ok, false));
+            }
+
+            var exists = bloom.Members.Contains(Convert.ToBase64String(element));
+            return Task.FromResult(new ProbabilisticBoolResult(ProbabilisticResultStatus.Ok, exists));
+        }
+
+        public Task<ProbabilisticArrayResult> BloomMExistsAsync(string key, byte[][] elements, CancellationToken token = default)
+        {
+            if (HasNonBloomType(key))
+            {
+                return Task.FromResult(new ProbabilisticArrayResult(ProbabilisticResultStatus.WrongType, Array.Empty<long>()));
+            }
+
+            if (!_bloom.TryGetValue(key, out var bloom))
+            {
+                return Task.FromResult(new ProbabilisticArrayResult(ProbabilisticResultStatus.Ok, new long[elements.Length]));
+            }
+
+            var values = new long[elements.Length];
+            for (int i = 0; i < elements.Length; i++)
+            {
+                values[i] = bloom.Members.Contains(Convert.ToBase64String(elements[i])) ? 1 : 0;
+            }
+
+            return Task.FromResult(new ProbabilisticArrayResult(ProbabilisticResultStatus.Ok, values));
+        }
+
+        public Task<ProbabilisticInfoResult> BloomInfoAsync(string key, CancellationToken token = default)
+        {
+            if (HasNonBloomType(key))
+            {
+                return Task.FromResult(new ProbabilisticInfoResult(ProbabilisticResultStatus.WrongType, Array.Empty<KeyValuePair<string, string>>()));
+            }
+
+            if (!_bloom.TryGetValue(key, out var bloom))
+            {
+                return Task.FromResult(new ProbabilisticInfoResult(ProbabilisticResultStatus.NotFound, Array.Empty<KeyValuePair<string, string>>()));
+            }
+
+            var fields = new[]
+            {
+                new KeyValuePair<string, string>("Capacity", bloom.Capacity.ToString(CultureInfo.InvariantCulture)),
+                new KeyValuePair<string, string>("Size", bloom.Members.Count.ToString(CultureInfo.InvariantCulture)),
+                new KeyValuePair<string, string>("Number of filters", "1"),
+                new KeyValuePair<string, string>("Number of items inserted", bloom.Members.Count.ToString(CultureInfo.InvariantCulture)),
+                new KeyValuePair<string, string>("Expansion rate", "2")
+            };
+
+            return Task.FromResult(new ProbabilisticInfoResult(ProbabilisticResultStatus.Ok, fields));
+        }
+
+        public Task<ProbabilisticResultStatus> CuckooReserveAsync(string key, long capacity, CancellationToken token = default)
+        {
+            if (capacity <= 0)
+            {
+                return Task.FromResult(ProbabilisticResultStatus.InvalidArgument);
+            }
+
+            if (_cuckoo.ContainsKey(key))
+            {
+                return Task.FromResult(ProbabilisticResultStatus.Exists);
+            }
+
+            if (HasNonCuckooType(key))
+            {
+                return Task.FromResult(ProbabilisticResultStatus.WrongType);
+            }
+
+            _cuckoo[key] = new CuckooSketchModel(capacity);
+            _data.Remove(key);
+            return Task.FromResult(ProbabilisticResultStatus.Ok);
+        }
+
+        public Task<ProbabilisticBoolResult> CuckooAddAsync(string key, byte[] item, bool noCreate, CancellationToken token = default)
+        {
+            if (HasNonCuckooType(key))
+            {
+                return Task.FromResult(new ProbabilisticBoolResult(ProbabilisticResultStatus.WrongType, false));
+            }
+
+            if (!_cuckoo.TryGetValue(key, out var cuckoo))
+            {
+                if (noCreate)
+                {
+                    return Task.FromResult(new ProbabilisticBoolResult(ProbabilisticResultStatus.NotFound, false));
+                }
+
+                cuckoo = new CuckooSketchModel(100);
+                _cuckoo[key] = cuckoo;
+                _data.Remove(key);
+            }
+
+            var encoded = Convert.ToBase64String(item);
+            if (!cuckoo.Members.TryGetValue(encoded, out var count))
+            {
+                cuckoo.Members[encoded] = 1;
+            }
+            else
+            {
+                cuckoo.Members[encoded] = count + 1;
+            }
+
+            return Task.FromResult(new ProbabilisticBoolResult(ProbabilisticResultStatus.Ok, true));
+        }
+
+        public Task<ProbabilisticBoolResult> CuckooAddNxAsync(string key, byte[] item, bool noCreate, CancellationToken token = default)
+        {
+            if (HasNonCuckooType(key))
+            {
+                return Task.FromResult(new ProbabilisticBoolResult(ProbabilisticResultStatus.WrongType, false));
+            }
+
+            if (!_cuckoo.TryGetValue(key, out var cuckoo))
+            {
+                if (noCreate)
+                {
+                    return Task.FromResult(new ProbabilisticBoolResult(ProbabilisticResultStatus.NotFound, false));
+                }
+
+                cuckoo = new CuckooSketchModel(100);
+                _cuckoo[key] = cuckoo;
+                _data.Remove(key);
+            }
+
+            var encoded = Convert.ToBase64String(item);
+            if (cuckoo.Members.ContainsKey(encoded))
+            {
+                return Task.FromResult(new ProbabilisticBoolResult(ProbabilisticResultStatus.Ok, false));
+            }
+
+            cuckoo.Members[encoded] = 1;
+            return Task.FromResult(new ProbabilisticBoolResult(ProbabilisticResultStatus.Ok, true));
+        }
+
+        public Task<ProbabilisticBoolResult> CuckooExistsAsync(string key, byte[] item, CancellationToken token = default)
+        {
+            if (HasNonCuckooType(key))
+            {
+                return Task.FromResult(new ProbabilisticBoolResult(ProbabilisticResultStatus.WrongType, false));
+            }
+
+            if (!_cuckoo.TryGetValue(key, out var cuckoo))
+            {
+                return Task.FromResult(new ProbabilisticBoolResult(ProbabilisticResultStatus.Ok, false));
+            }
+
+            var exists = cuckoo.Members.TryGetValue(Convert.ToBase64String(item), out var count) && count > 0;
+            return Task.FromResult(new ProbabilisticBoolResult(ProbabilisticResultStatus.Ok, exists));
+        }
+
+        public Task<ProbabilisticBoolResult> CuckooDeleteAsync(string key, byte[] item, CancellationToken token = default)
+        {
+            if (HasNonCuckooType(key))
+            {
+                return Task.FromResult(new ProbabilisticBoolResult(ProbabilisticResultStatus.WrongType, false));
+            }
+
+            if (!_cuckoo.TryGetValue(key, out var cuckoo))
+            {
+                return Task.FromResult(new ProbabilisticBoolResult(ProbabilisticResultStatus.Ok, false));
+            }
+
+            var encoded = Convert.ToBase64String(item);
+            if (!cuckoo.Members.TryGetValue(encoded, out var count) || count <= 0)
+            {
+                return Task.FromResult(new ProbabilisticBoolResult(ProbabilisticResultStatus.Ok, false));
+            }
+
+            if (count == 1)
+            {
+                cuckoo.Members.Remove(encoded);
+            }
+            else
+            {
+                cuckoo.Members[encoded] = count - 1;
+            }
+
+            return Task.FromResult(new ProbabilisticBoolResult(ProbabilisticResultStatus.Ok, true));
+        }
+
+        public Task<ProbabilisticCountResult> CuckooCountAsync(string key, byte[] item, CancellationToken token = default)
+        {
+            if (HasNonCuckooType(key))
+            {
+                return Task.FromResult(new ProbabilisticCountResult(ProbabilisticResultStatus.WrongType, 0));
+            }
+
+            if (!_cuckoo.TryGetValue(key, out var cuckoo))
+            {
+                return Task.FromResult(new ProbabilisticCountResult(ProbabilisticResultStatus.Ok, 0));
+            }
+
+            var encoded = Convert.ToBase64String(item);
+            var count = cuckoo.Members.TryGetValue(encoded, out var value) ? value : 0;
+            return Task.FromResult(new ProbabilisticCountResult(ProbabilisticResultStatus.Ok, count));
+        }
+
+        public Task<ProbabilisticInfoResult> CuckooInfoAsync(string key, CancellationToken token = default)
+        {
+            if (HasNonCuckooType(key))
+            {
+                return Task.FromResult(new ProbabilisticInfoResult(ProbabilisticResultStatus.WrongType, Array.Empty<KeyValuePair<string, string>>()));
+            }
+
+            if (!_cuckoo.TryGetValue(key, out var cuckoo))
+            {
+                return Task.FromResult(new ProbabilisticInfoResult(ProbabilisticResultStatus.NotFound, Array.Empty<KeyValuePair<string, string>>()));
+            }
+
+            var total = cuckoo.Members.Values.Sum();
+            var fields = new[]
+            {
+                new KeyValuePair<string, string>("Size", total.ToString(CultureInfo.InvariantCulture)),
+                new KeyValuePair<string, string>("Number of buckets", cuckoo.Capacity.ToString(CultureInfo.InvariantCulture)),
+                new KeyValuePair<string, string>("Number of filters", "1"),
+                new KeyValuePair<string, string>("Number of items inserted", total.ToString(CultureInfo.InvariantCulture)),
+                new KeyValuePair<string, string>("Bucket size", "2"),
+                new KeyValuePair<string, string>("Expansion rate", "1")
+            };
+
+            return Task.FromResult(new ProbabilisticInfoResult(ProbabilisticResultStatus.Ok, fields));
+        }
+
+        public Task<ProbabilisticResultStatus> TDigestCreateAsync(string key, int compression, CancellationToken token = default)
+        {
+            if (compression <= 0)
+            {
+                return Task.FromResult(ProbabilisticResultStatus.InvalidArgument);
+            }
+
+            if (_tdigest.ContainsKey(key))
+            {
+                return Task.FromResult(ProbabilisticResultStatus.Exists);
+            }
+
+            if (HasNonTDigestType(key))
+            {
+                return Task.FromResult(ProbabilisticResultStatus.WrongType);
+            }
+
+            _tdigest[key] = new TDigestSketchModel(compression);
+            _data.Remove(key);
+            return Task.FromResult(ProbabilisticResultStatus.Ok);
+        }
+
+        public Task<ProbabilisticResultStatus> TDigestResetAsync(string key, CancellationToken token = default)
+        {
+            if (HasNonTDigestType(key))
+            {
+                return Task.FromResult(ProbabilisticResultStatus.WrongType);
+            }
+
+            if (!_tdigest.TryGetValue(key, out var digest))
+            {
+                return Task.FromResult(ProbabilisticResultStatus.NotFound);
+            }
+
+            digest.Values.Clear();
+            return Task.FromResult(ProbabilisticResultStatus.Ok);
+        }
+
+        public Task<ProbabilisticResultStatus> TDigestAddAsync(string key, double[] values, CancellationToken token = default)
+        {
+            if (HasNonTDigestType(key))
+            {
+                return Task.FromResult(ProbabilisticResultStatus.WrongType);
+            }
+
+            if (!_tdigest.TryGetValue(key, out var digest))
+            {
+                return Task.FromResult(ProbabilisticResultStatus.NotFound);
+            }
+
+            digest.Values.AddRange(values);
+            return Task.FromResult(ProbabilisticResultStatus.Ok);
+        }
+
+        public Task<ProbabilisticDoubleArrayResult> TDigestQuantileAsync(string key, double[] quantiles, CancellationToken token = default)
+        {
+            if (HasNonTDigestType(key))
+            {
+                return Task.FromResult(new ProbabilisticDoubleArrayResult(ProbabilisticResultStatus.WrongType, Array.Empty<double>()));
+            }
+
+            if (!_tdigest.TryGetValue(key, out var digest))
+            {
+                return Task.FromResult(new ProbabilisticDoubleArrayResult(ProbabilisticResultStatus.NotFound, Array.Empty<double>()));
+            }
+
+            var sorted = digest.Values.OrderBy(v => v).ToArray();
+            var output = new double[quantiles.Length];
+            if (sorted.Length == 0)
+            {
+                return Task.FromResult(new ProbabilisticDoubleArrayResult(ProbabilisticResultStatus.Ok, Enumerable.Repeat(double.NaN, quantiles.Length).ToArray()));
+            }
+
+            for (int i = 0; i < quantiles.Length; i++)
+            {
+                var q = Math.Clamp(quantiles[i], 0d, 1d);
+                var position = q * (sorted.Length - 1);
+                var low = (int)Math.Floor(position);
+                var high = (int)Math.Ceiling(position);
+                if (low == high)
+                {
+                    output[i] = sorted[low];
+                }
+                else
+                {
+                    var frac = position - low;
+                    output[i] = sorted[low] + (sorted[high] - sorted[low]) * frac;
+                }
+            }
+
+            return Task.FromResult(new ProbabilisticDoubleArrayResult(ProbabilisticResultStatus.Ok, output));
+        }
+
+        public Task<ProbabilisticDoubleArrayResult> TDigestCdfAsync(string key, double[] values, CancellationToken token = default)
+        {
+            if (HasNonTDigestType(key))
+            {
+                return Task.FromResult(new ProbabilisticDoubleArrayResult(ProbabilisticResultStatus.WrongType, Array.Empty<double>()));
+            }
+
+            if (!_tdigest.TryGetValue(key, out var digest))
+            {
+                return Task.FromResult(new ProbabilisticDoubleArrayResult(ProbabilisticResultStatus.NotFound, Array.Empty<double>()));
+            }
+
+            var sorted = digest.Values.OrderBy(v => v).ToArray();
+            var output = new double[values.Length];
+            if (sorted.Length == 0)
+            {
+                return Task.FromResult(new ProbabilisticDoubleArrayResult(ProbabilisticResultStatus.Ok, output));
+            }
+
+            for (int i = 0; i < values.Length; i++)
+            {
+                var index = Array.BinarySearch(sorted, values[i]);
+                if (index < 0)
+                {
+                    index = ~index;
+                }
+                else
+                {
+                    while (index < sorted.Length && sorted[index] <= values[i])
+                    {
+                        index++;
+                    }
+                }
+
+                output[i] = (double)index / sorted.Length;
+            }
+
+            return Task.FromResult(new ProbabilisticDoubleArrayResult(ProbabilisticResultStatus.Ok, output));
+        }
+
+        public Task<ProbabilisticDoubleResult> TDigestMinAsync(string key, CancellationToken token = default)
+        {
+            if (HasNonTDigestType(key))
+            {
+                return Task.FromResult(new ProbabilisticDoubleResult(ProbabilisticResultStatus.WrongType, null));
+            }
+
+            if (!_tdigest.TryGetValue(key, out var digest))
+            {
+                return Task.FromResult(new ProbabilisticDoubleResult(ProbabilisticResultStatus.NotFound, null));
+            }
+
+            var value = digest.Values.Count == 0 ? (double?)null : digest.Values.Min();
+            return Task.FromResult(new ProbabilisticDoubleResult(ProbabilisticResultStatus.Ok, value));
+        }
+
+        public Task<ProbabilisticDoubleResult> TDigestMaxAsync(string key, CancellationToken token = default)
+        {
+            if (HasNonTDigestType(key))
+            {
+                return Task.FromResult(new ProbabilisticDoubleResult(ProbabilisticResultStatus.WrongType, null));
+            }
+
+            if (!_tdigest.TryGetValue(key, out var digest))
+            {
+                return Task.FromResult(new ProbabilisticDoubleResult(ProbabilisticResultStatus.NotFound, null));
+            }
+
+            var value = digest.Values.Count == 0 ? (double?)null : digest.Values.Max();
+            return Task.FromResult(new ProbabilisticDoubleResult(ProbabilisticResultStatus.Ok, value));
+        }
+
+        public Task<ProbabilisticInfoResult> TDigestInfoAsync(string key, CancellationToken token = default)
+        {
+            if (HasNonTDigestType(key))
+            {
+                return Task.FromResult(new ProbabilisticInfoResult(ProbabilisticResultStatus.WrongType, Array.Empty<KeyValuePair<string, string>>()));
+            }
+
+            if (!_tdigest.TryGetValue(key, out var digest))
+            {
+                return Task.FromResult(new ProbabilisticInfoResult(ProbabilisticResultStatus.NotFound, Array.Empty<KeyValuePair<string, string>>()));
+            }
+
+            var fields = new[]
+            {
+                new KeyValuePair<string, string>("Compression", digest.Compression.ToString(CultureInfo.InvariantCulture)),
+                new KeyValuePair<string, string>("Merged nodes", digest.Values.Count.ToString(CultureInfo.InvariantCulture)),
+                new KeyValuePair<string, string>("Unmerged nodes", "0"),
+                new KeyValuePair<string, string>("Observations", digest.Values.Count.ToString(CultureInfo.InvariantCulture)),
+                new KeyValuePair<string, string>("Total compressions", "0")
+            };
+
+            return Task.FromResult(new ProbabilisticInfoResult(ProbabilisticResultStatus.Ok, fields));
+        }
+
+        public Task<ProbabilisticResultStatus> TopKReserveAsync(string key, int k, int width, int depth, double decay, CancellationToken token = default)
+        {
+            if (k <= 0 || width <= 0 || depth <= 0 || decay <= 0 || decay >= 1)
+            {
+                return Task.FromResult(ProbabilisticResultStatus.InvalidArgument);
+            }
+
+            if (_topk.ContainsKey(key))
+            {
+                return Task.FromResult(ProbabilisticResultStatus.Exists);
+            }
+
+            if (HasNonTopKType(key))
+            {
+                return Task.FromResult(ProbabilisticResultStatus.WrongType);
+            }
+
+            _topk[key] = new TopKSketchModel(k, width, depth, decay);
+            _data.Remove(key);
+            return Task.FromResult(ProbabilisticResultStatus.Ok);
+        }
+
+        public Task<ProbabilisticStringArrayResult> TopKAddAsync(string key, byte[][] items, CancellationToken token = default)
+        {
+            if (HasNonTopKType(key))
+            {
+                return Task.FromResult(new ProbabilisticStringArrayResult(ProbabilisticResultStatus.WrongType, Array.Empty<string?>()));
+            }
+
+            if (!_topk.TryGetValue(key, out var topk))
+            {
+                return Task.FromResult(new ProbabilisticStringArrayResult(ProbabilisticResultStatus.NotFound, Array.Empty<string?>()));
+            }
+
+            var dropped = new string?[items.Length];
+            for (int i = 0; i < items.Length; i++)
+            {
+                dropped[i] = TopKApplyIncrement(topk, items[i], 1);
+            }
+
+            return Task.FromResult(new ProbabilisticStringArrayResult(ProbabilisticResultStatus.Ok, dropped));
+        }
+
+        public Task<ProbabilisticStringArrayResult> TopKIncrByAsync(string key, KeyValuePair<byte[], long>[] increments, CancellationToken token = default)
+        {
+            if (HasNonTopKType(key))
+            {
+                return Task.FromResult(new ProbabilisticStringArrayResult(ProbabilisticResultStatus.WrongType, Array.Empty<string?>()));
+            }
+
+            if (!_topk.TryGetValue(key, out var topk))
+            {
+                return Task.FromResult(new ProbabilisticStringArrayResult(ProbabilisticResultStatus.NotFound, Array.Empty<string?>()));
+            }
+
+            var dropped = new string?[increments.Length];
+            for (int i = 0; i < increments.Length; i++)
+            {
+                dropped[i] = TopKApplyIncrement(topk, increments[i].Key, increments[i].Value);
+            }
+
+            return Task.FromResult(new ProbabilisticStringArrayResult(ProbabilisticResultStatus.Ok, dropped));
+        }
+
+        public Task<ProbabilisticArrayResult> TopKQueryAsync(string key, byte[][] items, CancellationToken token = default)
+        {
+            if (HasNonTopKType(key))
+            {
+                return Task.FromResult(new ProbabilisticArrayResult(ProbabilisticResultStatus.WrongType, Array.Empty<long>()));
+            }
+
+            if (!_topk.TryGetValue(key, out var topk))
+            {
+                return Task.FromResult(new ProbabilisticArrayResult(ProbabilisticResultStatus.NotFound, Array.Empty<long>()));
+            }
+
+            var top = TopKOrdered(topk).Select(x => x.Key).ToHashSet(StringComparer.Ordinal);
+            var result = new long[items.Length];
+            for (int i = 0; i < items.Length; i++)
+            {
+                result[i] = top.Contains(Convert.ToBase64String(items[i])) ? 1 : 0;
+            }
+
+            return Task.FromResult(new ProbabilisticArrayResult(ProbabilisticResultStatus.Ok, result));
+        }
+
+        public Task<ProbabilisticArrayResult> TopKCountAsync(string key, byte[][] items, CancellationToken token = default)
+        {
+            if (HasNonTopKType(key))
+            {
+                return Task.FromResult(new ProbabilisticArrayResult(ProbabilisticResultStatus.WrongType, Array.Empty<long>()));
+            }
+
+            if (!_topk.TryGetValue(key, out var topk))
+            {
+                return Task.FromResult(new ProbabilisticArrayResult(ProbabilisticResultStatus.NotFound, Array.Empty<long>()));
+            }
+
+            var result = new long[items.Length];
+            for (int i = 0; i < items.Length; i++)
+            {
+                result[i] = topk.Counts.TryGetValue(Convert.ToBase64String(items[i]), out var count) ? count : 0;
+            }
+
+            return Task.FromResult(new ProbabilisticArrayResult(ProbabilisticResultStatus.Ok, result));
+        }
+
+        public Task<ProbabilisticStringArrayResult> TopKListAsync(string key, bool withCount, CancellationToken token = default)
+        {
+            if (HasNonTopKType(key))
+            {
+                return Task.FromResult(new ProbabilisticStringArrayResult(ProbabilisticResultStatus.WrongType, Array.Empty<string?>()));
+            }
+
+            if (!_topk.TryGetValue(key, out var topk))
+            {
+                return Task.FromResult(new ProbabilisticStringArrayResult(ProbabilisticResultStatus.NotFound, Array.Empty<string?>()));
+            }
+
+            var ordered = TopKOrdered(topk);
+            if (!withCount)
+            {
+                var values = ordered.Select(x => Utf8.GetString(Convert.FromBase64String(x.Key))).Cast<string?>().ToArray();
+                return Task.FromResult(new ProbabilisticStringArrayResult(ProbabilisticResultStatus.Ok, values));
+            }
+
+            var output = new string?[ordered.Count * 2];
+            for (int i = 0; i < ordered.Count; i++)
+            {
+                output[i * 2] = Utf8.GetString(Convert.FromBase64String(ordered[i].Key));
+                output[i * 2 + 1] = ordered[i].Value.ToString(CultureInfo.InvariantCulture);
+            }
+
+            return Task.FromResult(new ProbabilisticStringArrayResult(ProbabilisticResultStatus.Ok, output));
+        }
+
+        public Task<ProbabilisticInfoResult> TopKInfoAsync(string key, CancellationToken token = default)
+        {
+            if (HasNonTopKType(key))
+            {
+                return Task.FromResult(new ProbabilisticInfoResult(ProbabilisticResultStatus.WrongType, Array.Empty<KeyValuePair<string, string>>()));
+            }
+
+            if (!_topk.TryGetValue(key, out var topk))
+            {
+                return Task.FromResult(new ProbabilisticInfoResult(ProbabilisticResultStatus.NotFound, Array.Empty<KeyValuePair<string, string>>()));
+            }
+
+            var fields = new[]
+            {
+                new KeyValuePair<string, string>("k", topk.K.ToString(CultureInfo.InvariantCulture)),
+                new KeyValuePair<string, string>("width", topk.Width.ToString(CultureInfo.InvariantCulture)),
+                new KeyValuePair<string, string>("depth", topk.Depth.ToString(CultureInfo.InvariantCulture)),
+                new KeyValuePair<string, string>("decay", topk.Decay.ToString("G17", CultureInfo.InvariantCulture))
+            };
+
+            return Task.FromResult(new ProbabilisticInfoResult(ProbabilisticResultStatus.Ok, fields));
         }
 
         public Task<VectorSetResult> VectorSetAsync(
@@ -7313,6 +8180,53 @@ namespace Dredis.Tests
             return (long)Math.Round(estimate, MidpointRounding.AwayFromZero);
         }
 
+        private bool HasNonBloomType(string key)
+        {
+            return _data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _sets.ContainsKey(key) || _sortedSets.ContainsKey(key) || _vectors.ContainsKey(key) || _streams.ContainsKey(key) || _cuckoo.ContainsKey(key) || _tdigest.ContainsKey(key) || _topk.ContainsKey(key);
+        }
+
+        private bool HasNonCuckooType(string key)
+        {
+            return _data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _sets.ContainsKey(key) || _sortedSets.ContainsKey(key) || _vectors.ContainsKey(key) || _streams.ContainsKey(key) || _bloom.ContainsKey(key) || _tdigest.ContainsKey(key) || _topk.ContainsKey(key);
+        }
+
+        private bool HasNonTDigestType(string key)
+        {
+            return _data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _sets.ContainsKey(key) || _sortedSets.ContainsKey(key) || _vectors.ContainsKey(key) || _streams.ContainsKey(key) || _bloom.ContainsKey(key) || _cuckoo.ContainsKey(key) || _topk.ContainsKey(key);
+        }
+
+        private bool HasNonTopKType(string key)
+        {
+            return _data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _sets.ContainsKey(key) || _sortedSets.ContainsKey(key) || _vectors.ContainsKey(key) || _streams.ContainsKey(key) || _bloom.ContainsKey(key) || _cuckoo.ContainsKey(key) || _tdigest.ContainsKey(key);
+        }
+
+        private static List<KeyValuePair<string, long>> TopKOrdered(TopKSketchModel topk)
+        {
+            return topk.Counts
+                .OrderByDescending(x => x.Value)
+                .ThenBy(x => x.Key, StringComparer.Ordinal)
+                .Take(topk.K)
+                .ToList();
+        }
+
+        private string? TopKApplyIncrement(TopKSketchModel topk, byte[] item, long increment)
+        {
+            var before = TopKOrdered(topk).Select(x => x.Key).ToHashSet(StringComparer.Ordinal);
+            var encoded = Convert.ToBase64String(item);
+            if (topk.Counts.TryGetValue(encoded, out var count))
+            {
+                topk.Counts[encoded] = count + increment;
+            }
+            else
+            {
+                topk.Counts[encoded] = increment;
+            }
+
+            var after = TopKOrdered(topk).Select(x => x.Key).ToHashSet(StringComparer.Ordinal);
+            var dropped = before.FirstOrDefault(x => !after.Contains(x));
+            return dropped == null ? null : Utf8.GetString(Convert.FromBase64String(dropped));
+        }
+
         /// <summary>
         /// Retrieves a stored value while honoring expiration.
         /// </summary>
@@ -7354,7 +8268,7 @@ namespace Dredis.Tests
                 return false;
             }
 
-            return _data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _sets.ContainsKey(key) || _sortedSets.ContainsKey(key) || _vectors.ContainsKey(key) || _streams.ContainsKey(key);
+            return _data.ContainsKey(key) || _hashes.ContainsKey(key) || _lists.ContainsKey(key) || _sets.ContainsKey(key) || _sortedSets.ContainsKey(key) || _vectors.ContainsKey(key) || _streams.ContainsKey(key) || _bloom.ContainsKey(key) || _cuckoo.ContainsKey(key) || _tdigest.ContainsKey(key) || _topk.ContainsKey(key);
         }
 
         /// <summary>
@@ -7382,6 +8296,10 @@ namespace Dredis.Tests
             removed |= _sortedSets.Remove(key);
             removed |= _vectors.Remove(key);
             removed |= _streams.Remove(key);
+            removed |= _bloom.Remove(key);
+            removed |= _cuckoo.Remove(key);
+            removed |= _tdigest.Remove(key);
+            removed |= _topk.Remove(key);
             _streamLastIds.Remove(key);
             _streamGroups.Remove(key);
             _expirations.Remove(key);

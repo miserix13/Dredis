@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Net;
 using System.Numerics;
 using System.Text;
@@ -955,6 +956,118 @@ namespace Dredis
 
                 case "PFMERGE":
                     await HandlePfMergeAsync(ctx, elements);
+                    break;
+
+                case "BF.RESERVE":
+                    await HandleBloomReserveAsync(ctx, elements);
+                    break;
+
+                case "BF.ADD":
+                    await HandleBloomAddAsync(ctx, elements);
+                    break;
+
+                case "BF.MADD":
+                    await HandleBloomMAddAsync(ctx, elements);
+                    break;
+
+                case "BF.EXISTS":
+                    await HandleBloomExistsAsync(ctx, elements);
+                    break;
+
+                case "BF.MEXISTS":
+                    await HandleBloomMExistsAsync(ctx, elements);
+                    break;
+
+                case "BF.INFO":
+                    await HandleBloomInfoAsync(ctx, elements);
+                    break;
+
+                case "CF.RESERVE":
+                    await HandleCuckooReserveAsync(ctx, elements);
+                    break;
+
+                case "CF.ADD":
+                    await HandleCuckooAddAsync(ctx, elements, nx: false);
+                    break;
+
+                case "CF.ADDNX":
+                    await HandleCuckooAddAsync(ctx, elements, nx: true);
+                    break;
+
+                case "CF.EXISTS":
+                    await HandleCuckooExistsAsync(ctx, elements);
+                    break;
+
+                case "CF.DEL":
+                    await HandleCuckooDelAsync(ctx, elements);
+                    break;
+
+                case "CF.COUNT":
+                    await HandleCuckooCountAsync(ctx, elements);
+                    break;
+
+                case "CF.INFO":
+                    await HandleCuckooInfoAsync(ctx, elements);
+                    break;
+
+                case "TDIGEST.CREATE":
+                    await HandleTDigestCreateAsync(ctx, elements);
+                    break;
+
+                case "TDIGEST.RESET":
+                    await HandleTDigestResetAsync(ctx, elements);
+                    break;
+
+                case "TDIGEST.ADD":
+                    await HandleTDigestAddAsync(ctx, elements);
+                    break;
+
+                case "TDIGEST.QUANTILE":
+                    await HandleTDigestQuantileAsync(ctx, elements);
+                    break;
+
+                case "TDIGEST.CDF":
+                    await HandleTDigestCdfAsync(ctx, elements);
+                    break;
+
+                case "TDIGEST.MIN":
+                    await HandleTDigestMinAsync(ctx, elements);
+                    break;
+
+                case "TDIGEST.MAX":
+                    await HandleTDigestMaxAsync(ctx, elements);
+                    break;
+
+                case "TDIGEST.INFO":
+                    await HandleTDigestInfoAsync(ctx, elements);
+                    break;
+
+                case "TOPK.RESERVE":
+                    await HandleTopKReserveAsync(ctx, elements);
+                    break;
+
+                case "TOPK.ADD":
+                    await HandleTopKAddAsync(ctx, elements);
+                    break;
+
+                case "TOPK.INCRBY":
+                    await HandleTopKIncrByAsync(ctx, elements);
+                    break;
+
+                case "TOPK.QUERY":
+                    await HandleTopKQueryAsync(ctx, elements);
+                    break;
+
+                case "TOPK.COUNT":
+                    await HandleTopKCountAsync(ctx, elements);
+                    break;
+
+                case "TOPK.LIST":
+                    await HandleTopKListAsync(ctx, elements);
+                    break;
+
+                case "TOPK.INFO":
+                    await HandleTopKInfoAsync(ctx, elements);
                     break;
 
                 case "VSET":
@@ -3088,6 +3201,965 @@ namespace Dredis
 
             WriteSimpleString(ctx, "OK");
             Transactions.NotifyKeyModified(destinationKey, _store);
+        }
+
+        private async Task HandleBloomReserveAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count != 4)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'bf.reserve' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key) ||
+                !TryGetString(args[2], out var errorRateText) ||
+                !double.TryParse(errorRateText, NumberStyles.Float, CultureInfo.InvariantCulture, out var errorRate) ||
+                !TryGetString(args[3], out var capacityText) ||
+                !long.TryParse(capacityText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var capacity))
+            {
+                WriteError(ctx, "ERR invalid arguments");
+                return;
+            }
+
+            var result = await _store.BloomReserveAsync(key, errorRate, capacity).ConfigureAwait(false);
+            if (result == ProbabilisticResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Probabilistic structure type mismatch");
+                return;
+            }
+
+            if (result == ProbabilisticResultStatus.Exists)
+            {
+                WriteError(ctx, "ERR item exists");
+                return;
+            }
+
+            if (result == ProbabilisticResultStatus.InvalidArgument)
+            {
+                WriteError(ctx, "ERR invalid arguments");
+                return;
+            }
+
+            WriteSimpleString(ctx, "OK");
+            Transactions.NotifyKeyModified(key, _store);
+        }
+
+        private async Task HandleBloomAddAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count != 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'bf.add' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key) || !TryGetBytes(args[2], out var element))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var result = await _store.BloomAddAsync(key, element).ConfigureAwait(false);
+            if (result.Status == ProbabilisticResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Probabilistic structure type mismatch");
+                return;
+            }
+
+            WriteInteger(ctx, result.Value ? 1 : 0);
+            if (result.Value)
+            {
+                Transactions.NotifyKeyModified(key, _store);
+            }
+        }
+
+        private async Task HandleBloomMAddAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count < 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'bf.madd' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var elements = new byte[args.Count - 2][];
+            for (int i = 2; i < args.Count; i++)
+            {
+                if (!TryGetBytes(args[i], out var element))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                elements[i - 2] = element;
+            }
+
+            var result = await _store.BloomMAddAsync(key, elements).ConfigureAwait(false);
+            if (result.Status == ProbabilisticResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Probabilistic structure type mismatch");
+                return;
+            }
+
+            WriteIntegerArray(ctx, result.Values);
+            if (result.Values.Any(v => v != 0))
+            {
+                Transactions.NotifyKeyModified(key, _store);
+            }
+        }
+
+        private async Task HandleBloomExistsAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count != 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'bf.exists' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key) || !TryGetBytes(args[2], out var element))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var result = await _store.BloomExistsAsync(key, element).ConfigureAwait(false);
+            if (result.Status == ProbabilisticResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Probabilistic structure type mismatch");
+                return;
+            }
+
+            WriteInteger(ctx, result.Value ? 1 : 0);
+        }
+
+        private async Task HandleBloomMExistsAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count < 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'bf.mexists' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var elements = new byte[args.Count - 2][];
+            for (int i = 2; i < args.Count; i++)
+            {
+                if (!TryGetBytes(args[i], out var element))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                elements[i - 2] = element;
+            }
+
+            var result = await _store.BloomMExistsAsync(key, elements).ConfigureAwait(false);
+            if (result.Status == ProbabilisticResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Probabilistic structure type mismatch");
+                return;
+            }
+
+            WriteIntegerArray(ctx, result.Values);
+        }
+
+        private async Task HandleBloomInfoAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count != 2)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'bf.info' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var result = await _store.BloomInfoAsync(key).ConfigureAwait(false);
+            WriteProbabilisticInfo(ctx, result);
+        }
+
+        private async Task HandleCuckooReserveAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count != 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'cf.reserve' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key) ||
+                !TryGetString(args[2], out var capacityText) ||
+                !long.TryParse(capacityText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var capacity))
+            {
+                WriteError(ctx, "ERR invalid arguments");
+                return;
+            }
+
+            var result = await _store.CuckooReserveAsync(key, capacity).ConfigureAwait(false);
+            if (result == ProbabilisticResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Probabilistic structure type mismatch");
+                return;
+            }
+
+            if (result == ProbabilisticResultStatus.Exists)
+            {
+                WriteError(ctx, "ERR item exists");
+                return;
+            }
+
+            if (result == ProbabilisticResultStatus.InvalidArgument)
+            {
+                WriteError(ctx, "ERR invalid arguments");
+                return;
+            }
+
+            WriteSimpleString(ctx, "OK");
+            Transactions.NotifyKeyModified(key, _store);
+        }
+
+        private async Task HandleCuckooAddAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args, bool nx)
+        {
+            var commandName = nx ? "cf.addnx" : "cf.add";
+            if (args.Count != 3)
+            {
+                WriteError(ctx, $"ERR wrong number of arguments for '{commandName}' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key) || !TryGetBytes(args[2], out var item))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var result = nx
+                ? await _store.CuckooAddNxAsync(key, item, noCreate: false).ConfigureAwait(false)
+                : await _store.CuckooAddAsync(key, item, noCreate: false).ConfigureAwait(false);
+
+            if (result.Status == ProbabilisticResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Probabilistic structure type mismatch");
+                return;
+            }
+
+            WriteInteger(ctx, result.Value ? 1 : 0);
+            if (result.Value)
+            {
+                Transactions.NotifyKeyModified(key, _store);
+            }
+        }
+
+        private async Task HandleCuckooExistsAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count != 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'cf.exists' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key) || !TryGetBytes(args[2], out var item))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var result = await _store.CuckooExistsAsync(key, item).ConfigureAwait(false);
+            if (result.Status == ProbabilisticResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Probabilistic structure type mismatch");
+                return;
+            }
+
+            WriteInteger(ctx, result.Value ? 1 : 0);
+        }
+
+        private async Task HandleCuckooDelAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count != 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'cf.del' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key) || !TryGetBytes(args[2], out var item))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var result = await _store.CuckooDeleteAsync(key, item).ConfigureAwait(false);
+            if (result.Status == ProbabilisticResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Probabilistic structure type mismatch");
+                return;
+            }
+
+            WriteInteger(ctx, result.Value ? 1 : 0);
+            if (result.Value)
+            {
+                Transactions.NotifyKeyModified(key, _store);
+            }
+        }
+
+        private async Task HandleCuckooCountAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count != 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'cf.count' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key) || !TryGetBytes(args[2], out var item))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var result = await _store.CuckooCountAsync(key, item).ConfigureAwait(false);
+            if (result.Status == ProbabilisticResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Probabilistic structure type mismatch");
+                return;
+            }
+
+            WriteInteger(ctx, result.Count);
+        }
+
+        private async Task HandleCuckooInfoAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count != 2)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'cf.info' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var result = await _store.CuckooInfoAsync(key).ConfigureAwait(false);
+            WriteProbabilisticInfo(ctx, result);
+        }
+
+        private async Task HandleTDigestCreateAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count != 2 && args.Count != 4)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'tdigest.create' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var compression = 100;
+            if (args.Count == 4)
+            {
+                if (!TryGetString(args[2], out var option) || !option.Equals("COMPRESSION", StringComparison.OrdinalIgnoreCase) ||
+                    !TryGetString(args[3], out var compText) || !int.TryParse(compText, NumberStyles.Integer, CultureInfo.InvariantCulture, out compression))
+                {
+                    WriteError(ctx, "ERR invalid arguments");
+                    return;
+                }
+            }
+
+            var result = await _store.TDigestCreateAsync(key, compression).ConfigureAwait(false);
+            if (result == ProbabilisticResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Probabilistic structure type mismatch");
+                return;
+            }
+
+            if (result == ProbabilisticResultStatus.Exists)
+            {
+                WriteError(ctx, "ERR item exists");
+                return;
+            }
+
+            if (result == ProbabilisticResultStatus.InvalidArgument)
+            {
+                WriteError(ctx, "ERR invalid arguments");
+                return;
+            }
+
+            WriteSimpleString(ctx, "OK");
+            Transactions.NotifyKeyModified(key, _store);
+        }
+
+        private async Task HandleTDigestResetAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count != 2)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'tdigest.reset' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var result = await _store.TDigestResetAsync(key).ConfigureAwait(false);
+            if (result == ProbabilisticResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Probabilistic structure type mismatch");
+                return;
+            }
+
+            if (result == ProbabilisticResultStatus.NotFound)
+            {
+                WriteError(ctx, "ERR key does not exist");
+                return;
+            }
+
+            WriteSimpleString(ctx, "OK");
+            Transactions.NotifyKeyModified(key, _store);
+        }
+
+        private async Task HandleTDigestAddAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count < 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'tdigest.add' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var values = new double[args.Count - 2];
+            for (int i = 2; i < args.Count; i++)
+            {
+                if (!TryGetString(args[i], out var valueText) ||
+                    !double.TryParse(valueText, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) ||
+                    double.IsNaN(value) ||
+                    double.IsInfinity(value))
+                {
+                    WriteError(ctx, "ERR value is not a valid float");
+                    return;
+                }
+
+                values[i - 2] = value;
+            }
+
+            var result = await _store.TDigestAddAsync(key, values).ConfigureAwait(false);
+            if (result == ProbabilisticResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Probabilistic structure type mismatch");
+                return;
+            }
+
+            if (result == ProbabilisticResultStatus.NotFound)
+            {
+                WriteError(ctx, "ERR key does not exist");
+                return;
+            }
+
+            WriteSimpleString(ctx, "OK");
+            Transactions.NotifyKeyModified(key, _store);
+        }
+
+        private async Task HandleTDigestQuantileAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count < 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'tdigest.quantile' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var quantiles = new double[args.Count - 2];
+            for (int i = 2; i < args.Count; i++)
+            {
+                if (!TryGetString(args[i], out var qText) ||
+                    !double.TryParse(qText, NumberStyles.Float, CultureInfo.InvariantCulture, out var q))
+                {
+                    WriteError(ctx, "ERR value is not a valid float");
+                    return;
+                }
+
+                quantiles[i - 2] = q;
+            }
+
+            var result = await _store.TDigestQuantileAsync(key, quantiles).ConfigureAwait(false);
+            WriteDoubleArrayResult(ctx, result);
+        }
+
+        private async Task HandleTDigestCdfAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count < 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'tdigest.cdf' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var values = new double[args.Count - 2];
+            for (int i = 2; i < args.Count; i++)
+            {
+                if (!TryGetString(args[i], out var valueText) ||
+                    !double.TryParse(valueText, NumberStyles.Float, CultureInfo.InvariantCulture, out var value))
+                {
+                    WriteError(ctx, "ERR value is not a valid float");
+                    return;
+                }
+
+                values[i - 2] = value;
+            }
+
+            var result = await _store.TDigestCdfAsync(key, values).ConfigureAwait(false);
+            WriteDoubleArrayResult(ctx, result);
+        }
+
+        private async Task HandleTDigestMinAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count != 2)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'tdigest.min' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var result = await _store.TDigestMinAsync(key).ConfigureAwait(false);
+            WriteDoubleResult(ctx, result);
+        }
+
+        private async Task HandleTDigestMaxAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count != 2)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'tdigest.max' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var result = await _store.TDigestMaxAsync(key).ConfigureAwait(false);
+            WriteDoubleResult(ctx, result);
+        }
+
+        private async Task HandleTDigestInfoAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count != 2)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'tdigest.info' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var result = await _store.TDigestInfoAsync(key).ConfigureAwait(false);
+            WriteProbabilisticInfo(ctx, result);
+        }
+
+        private async Task HandleTopKReserveAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count != 3 && args.Count != 6)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'topk.reserve' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key) ||
+                !TryGetString(args[2], out var kText) ||
+                !int.TryParse(kText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var k))
+            {
+                WriteError(ctx, "ERR invalid arguments");
+                return;
+            }
+
+            var width = 8;
+            var depth = 7;
+            var decay = 0.9;
+            if (args.Count == 6)
+            {
+                if (!TryGetString(args[3], out var widthText) || !int.TryParse(widthText, NumberStyles.Integer, CultureInfo.InvariantCulture, out width) ||
+                    !TryGetString(args[4], out var depthText) || !int.TryParse(depthText, NumberStyles.Integer, CultureInfo.InvariantCulture, out depth) ||
+                    !TryGetString(args[5], out var decayText) || !double.TryParse(decayText, NumberStyles.Float, CultureInfo.InvariantCulture, out decay))
+                {
+                    WriteError(ctx, "ERR invalid arguments");
+                    return;
+                }
+            }
+
+            var result = await _store.TopKReserveAsync(key, k, width, depth, decay).ConfigureAwait(false);
+            if (result == ProbabilisticResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Probabilistic structure type mismatch");
+                return;
+            }
+
+            if (result == ProbabilisticResultStatus.Exists)
+            {
+                WriteError(ctx, "ERR item exists");
+                return;
+            }
+
+            if (result == ProbabilisticResultStatus.InvalidArgument)
+            {
+                WriteError(ctx, "ERR invalid arguments");
+                return;
+            }
+
+            WriteSimpleString(ctx, "OK");
+            Transactions.NotifyKeyModified(key, _store);
+        }
+
+        private async Task HandleTopKAddAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count < 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'topk.add' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var items = new byte[args.Count - 2][];
+            for (int i = 2; i < args.Count; i++)
+            {
+                if (!TryGetBytes(args[i], out var item))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                items[i - 2] = item;
+            }
+
+            var result = await _store.TopKAddAsync(key, items).ConfigureAwait(false);
+            WriteStringArrayResult(ctx, result);
+            if (result.Status == ProbabilisticResultStatus.Ok)
+            {
+                Transactions.NotifyKeyModified(key, _store);
+            }
+        }
+
+        private async Task HandleTopKIncrByAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count < 4 || ((args.Count - 2) % 2) != 0)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'topk.incrby' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var increments = new KeyValuePair<byte[], long>[(args.Count - 2) / 2];
+            for (int i = 2, j = 0; i < args.Count; i += 2, j++)
+            {
+                if (!TryGetBytes(args[i], out var item) ||
+                    !TryGetString(args[i + 1], out var incrementText) ||
+                    !long.TryParse(incrementText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var increment))
+                {
+                    WriteError(ctx, "ERR invalid arguments");
+                    return;
+                }
+
+                increments[j] = new KeyValuePair<byte[], long>(item, increment);
+            }
+
+            var result = await _store.TopKIncrByAsync(key, increments).ConfigureAwait(false);
+            WriteStringArrayResult(ctx, result);
+            if (result.Status == ProbabilisticResultStatus.Ok)
+            {
+                Transactions.NotifyKeyModified(key, _store);
+            }
+        }
+
+        private async Task HandleTopKQueryAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count < 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'topk.query' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var items = new byte[args.Count - 2][];
+            for (int i = 2; i < args.Count; i++)
+            {
+                if (!TryGetBytes(args[i], out var item))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                items[i - 2] = item;
+            }
+
+            var result = await _store.TopKQueryAsync(key, items).ConfigureAwait(false);
+            if (result.Status == ProbabilisticResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Probabilistic structure type mismatch");
+                return;
+            }
+
+            if (result.Status == ProbabilisticResultStatus.NotFound)
+            {
+                WriteError(ctx, "ERR key does not exist");
+                return;
+            }
+
+            WriteIntegerArray(ctx, result.Values);
+        }
+
+        private async Task HandleTopKCountAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count < 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'topk.count' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var items = new byte[args.Count - 2][];
+            for (int i = 2; i < args.Count; i++)
+            {
+                if (!TryGetBytes(args[i], out var item))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                items[i - 2] = item;
+            }
+
+            var result = await _store.TopKCountAsync(key, items).ConfigureAwait(false);
+            if (result.Status == ProbabilisticResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Probabilistic structure type mismatch");
+                return;
+            }
+
+            if (result.Status == ProbabilisticResultStatus.NotFound)
+            {
+                WriteError(ctx, "ERR key does not exist");
+                return;
+            }
+
+            WriteIntegerArray(ctx, result.Values);
+        }
+
+        private async Task HandleTopKListAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count != 2 && args.Count != 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'topk.list' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var withCount = false;
+            if (args.Count == 3)
+            {
+                if (!TryGetString(args[2], out var option) || !option.Equals("WITHCOUNT", StringComparison.OrdinalIgnoreCase))
+                {
+                    WriteError(ctx, "ERR syntax error");
+                    return;
+                }
+
+                withCount = true;
+            }
+
+            var result = await _store.TopKListAsync(key, withCount).ConfigureAwait(false);
+            WriteStringArrayResult(ctx, result);
+        }
+
+        private async Task HandleTopKInfoAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
+        {
+            if (args.Count != 2)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'topk.info' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var result = await _store.TopKInfoAsync(key).ConfigureAwait(false);
+            WriteProbabilisticInfo(ctx, result);
+        }
+
+        private void WriteProbabilisticInfo(IChannelHandlerContext ctx, ProbabilisticInfoResult result)
+        {
+            if (result.Status == ProbabilisticResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Probabilistic structure type mismatch");
+                return;
+            }
+
+            if (result.Status == ProbabilisticResultStatus.NotFound)
+            {
+                WriteError(ctx, "ERR key does not exist");
+                return;
+            }
+
+            var children = new IRedisMessage[result.Fields.Length * 2];
+            for (int i = 0; i < result.Fields.Length; i++)
+            {
+                children[i * 2] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(result.Fields[i].Key)));
+                children[i * 2 + 1] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(result.Fields[i].Value)));
+            }
+
+            WriteArray(ctx, children);
+        }
+
+        private void WriteDoubleArrayResult(IChannelHandlerContext ctx, ProbabilisticDoubleArrayResult result)
+        {
+            if (result.Status == ProbabilisticResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Probabilistic structure type mismatch");
+                return;
+            }
+
+            if (result.Status == ProbabilisticResultStatus.NotFound)
+            {
+                WriteError(ctx, "ERR key does not exist");
+                return;
+            }
+
+            var children = new IRedisMessage[result.Values.Length];
+            for (int i = 0; i < result.Values.Length; i++)
+            {
+                children[i] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(result.Values[i].ToString("G17", CultureInfo.InvariantCulture))));
+            }
+
+            WriteArray(ctx, children);
+        }
+
+        private void WriteDoubleResult(IChannelHandlerContext ctx, ProbabilisticDoubleResult result)
+        {
+            if (result.Status == ProbabilisticResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Probabilistic structure type mismatch");
+                return;
+            }
+
+            if (result.Status == ProbabilisticResultStatus.NotFound)
+            {
+                WriteError(ctx, "ERR key does not exist");
+                return;
+            }
+
+            if (!result.Value.HasValue)
+            {
+                WriteNullBulkString(ctx);
+                return;
+            }
+
+            WriteBulkString(ctx, Utf8.GetBytes(result.Value.Value.ToString("G17", CultureInfo.InvariantCulture)));
+        }
+
+        private void WriteStringArrayResult(IChannelHandlerContext ctx, ProbabilisticStringArrayResult result)
+        {
+            if (result.Status == ProbabilisticResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Probabilistic structure type mismatch");
+                return;
+            }
+
+            if (result.Status == ProbabilisticResultStatus.NotFound)
+            {
+                WriteError(ctx, "ERR key does not exist");
+                return;
+            }
+
+            var children = new IRedisMessage[result.Values.Length];
+            for (int i = 0; i < result.Values.Length; i++)
+            {
+                if (result.Values[i] == null)
+                {
+                    children[i] = FullBulkStringRedisMessage.Null;
+                }
+                else
+                {
+                    children[i] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(result.Values[i]!)));
+                }
+            }
+
+            WriteArray(ctx, children);
+        }
+
+        private void WriteIntegerArray(IChannelHandlerContext ctx, long[] values)
+        {
+            var children = new IRedisMessage[values.Length];
+            for (int i = 0; i < values.Length; i++)
+            {
+                children[i] = new IntegerRedisMessage(values[i]);
+            }
+
+            WriteArray(ctx, children);
         }
 
         private async Task HandleVectorSetAsync(
