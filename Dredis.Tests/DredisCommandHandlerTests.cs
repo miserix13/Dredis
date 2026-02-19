@@ -2891,7 +2891,7 @@ namespace Dredis.Tests
                 channel.RunPendingTasks();
 
                 var error = Assert.IsType<ErrorRedisMessage>(ReadOutbound(channel));
-                Assert.Equal("ERR invalid arguments", error.Content);
+                Assert.Equal("ERR wrong number of arguments for 'ts.mrevrange' command", error.Content);
             }
             finally
             {
