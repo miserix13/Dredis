@@ -36,8 +36,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Remove="**\bin\**\*.cs" />
+    <Compile Remove="**\obj\**\*.cs" />
     <Compile Remove="Dredis.Tests\**\*.cs" />
     <Compile Remove="Dredis.Tests\obj\**\*.cs" />
+    <Compile Remove="Dredis.Abstractions.Command\**\*.cs" />
     <Compile Remove="Dredis.Abstractions.Storage\**\*.cs" />
   </ItemGroup>
 

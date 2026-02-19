@@ -602,7 +602,8 @@ namespace Dredis
         private const long MaxBitOffset = ((long)int.MaxValue * 8) - 1;
         private static readonly PubSubManager PubSub = new PubSubManager();
         private static readonly TransactionManager Transactions = new TransactionManager();
-        private readonly List<ICommand> commands = [];
+        private readonly Dictionary<string, ICommand> _commands = new(StringComparer.OrdinalIgnoreCase);
+        private readonly object _commandsLock = new object();
 
         /// <summary>
         /// Gets the Pub/Sub manager (exposed for testing).
@@ -654,7 +655,23 @@ namespace Dredis
 
         public void Register(params ICommand[] commands)
         {
-            this.commands.AddRange(commands);
+            if (commands == null || commands.Length == 0)
+            {
+                return;
+            }
+
+            lock (_commandsLock)
+            {
+                foreach (var command in commands)
+                {
+                    if (command == null || string.IsNullOrWhiteSpace(command.Name))
+                    {
+                        continue;
+                    }
+
+                    _commands[command.Name] = command;
+                }
+            }
         }
 
         /// <summary>
@@ -1318,9 +1335,50 @@ namespace Dredis
                     break;
 
                 default:
-                    WriteError(ctx, $"ERR unknown command '{cmd}'");
+                    if (!await TryHandleCustomCommandAsync(ctx, elements, cmd))
+                    {
+                        WriteError(ctx, $"ERR unknown command '{cmd}'");
+                    }
                     break;
             }
+        }
+
+        private async Task<bool> TryHandleCustomCommandAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args, string commandName)
+        {
+            ICommand? command;
+            lock (_commandsLock)
+            {
+                _commands.TryGetValue(commandName, out command);
+            }
+
+            if (command == null)
+            {
+                return false;
+            }
+
+            var parameters = new string[args.Count - 1];
+            for (var i = 1; i < args.Count; i++)
+            {
+                if (!TryGetString(args[i], out var parameter))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return true;
+                }
+
+                parameters[i - 1] = parameter;
+            }
+
+            var result = await command.ExecuteAsync(parameters);
+            if (result == null)
+            {
+                WriteNullBulkString(ctx);
+            }
+            else
+            {
+                WriteBulkString(ctx, Utf8.GetBytes(result));
+            }
+
+            return true;
         }
 
         /// <summary>
@@ -5899,6 +5957,13 @@ namespace Dredis
             // Create a capturing context and handler to execute the command
             var capturingCtx = new CapturingContext();
             var handler = new DredisCommandHandler(_store);
+            ICommand[] registeredCommands;
+            lock (_commandsLock)
+            {
+                registeredCommands = _commands.Values.ToArray();
+            }
+
+            handler.Register(registeredCommands);
             
             // Call HandleCommandAsync directly and await it
             await handler.HandleCommandAsync(capturingCtx, command);

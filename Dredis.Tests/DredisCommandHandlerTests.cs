@@ -5,6 +5,7 @@ using System.Text;
 using DotNetty.Buffers;
 using DotNetty.Codecs.Redis.Messages;
 using DotNetty.Transport.Channels.Embedded;
+using Dredis.Abstractions.Command;
 using Dredis.Abstractions.Storage;
 using Xunit;
 
@@ -85,6 +86,94 @@ namespace Dredis.Tests
 
                 var error = Assert.IsType<ErrorRedisMessage>(response);
                 Assert.Equal("ERR wrong number of arguments for 'echo' command", error.Content);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
+        /// Verifies a registered custom command can be executed and return a bulk string.
+        /// </summary>
+        public async Task Register_CustomCommand_Executes()
+        {
+            var store = new InMemoryKeyValueStore();
+            var handler = new DredisCommandHandler(store);
+            handler.Register(new DelegateCommand("HELLO", parameters => Task.FromResult($"hello:{string.Join(",", parameters)}")));
+            var channel = new EmbeddedChannel(handler);
+
+            try
+            {
+                channel.WriteInbound(Command("HELLO", "one", "two"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var bulk = Assert.IsType<FullBulkStringRedisMessage>(response);
+                Assert.Equal("hello:one,two", GetBulkString(bulk));
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
+        /// Verifies registered custom commands do not override built-in commands.
+        /// </summary>
+        public async Task Register_BuiltinName_UsesBuiltinHandler()
+        {
+            var store = new InMemoryKeyValueStore();
+            var handler = new DredisCommandHandler(store);
+            handler.Register(new DelegateCommand("PING", _ => Task.FromResult("custom")));
+            var channel = new EmbeddedChannel(handler);
+
+            try
+            {
+                channel.WriteInbound(Command("PING"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var pong = Assert.IsType<SimpleStringRedisMessage>(response);
+                Assert.Equal("PONG", pong.Content);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
+        /// Verifies registered custom commands execute correctly inside MULTI/EXEC.
+        /// </summary>
+        public async Task Register_CustomCommand_WorksInTransaction()
+        {
+            var store = new InMemoryKeyValueStore();
+            var handler = new DredisCommandHandler(store);
+            handler.Register(new DelegateCommand("HELLO", parameters => Task.FromResult($"tx:{parameters[0]}")));
+            var channel = new EmbeddedChannel(handler);
+
+            try
+            {
+                channel.WriteInbound(Command("MULTI"));
+                channel.RunPendingTasks();
+                _ = Assert.IsType<SimpleStringRedisMessage>(ReadOutbound(channel));
+
+                channel.WriteInbound(Command("HELLO", "world"));
+                channel.RunPendingTasks();
+                var queued = Assert.IsType<SimpleStringRedisMessage>(ReadOutbound(channel));
+                Assert.Equal("QUEUED", queued.Content);
+
+                channel.WriteInbound(Command("EXEC"));
+                channel.RunPendingTasks();
+
+                var exec = Assert.IsType<ArrayRedisMessage>(ReadOutbound(channel));
+                Assert.Single(exec.Children);
+                var bulk = Assert.IsType<FullBulkStringRedisMessage>(exec.Children[0]);
+                Assert.Equal("tx:world", GetBulkString(bulk));
             }
             finally
             {
@@ -4651,6 +4740,24 @@ namespace Dredis.Tests
             }
 
             return result;
+        }
+    }
+
+    internal sealed class DelegateCommand : ICommand
+    {
+        private readonly Func<string[], Task<string>> _handler;
+
+        public DelegateCommand(string name, Func<string[], Task<string>> handler)
+        {
+            Name = name;
+            _handler = handler;
+        }
+
+        public string Name { get; }
+
+        public Task<string> ExecuteAsync(params string[] parameters)
+        {
+            return _handler(parameters);
         }
     }
 
