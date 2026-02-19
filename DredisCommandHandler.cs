@@ -945,6 +945,18 @@ namespace Dredis
                     await HandleSortedSetRemoveRangeByScoreAsync(ctx, elements);
                     break;
 
+                case "PFADD":
+                    await HandlePfAddAsync(ctx, elements);
+                    break;
+
+                case "PFCOUNT":
+                    await HandlePfCountAsync(ctx, elements);
+                    break;
+
+                case "PFMERGE":
+                    await HandlePfMergeAsync(ctx, elements);
+                    break;
+
                 case "VSET":
                     await HandleVectorSetAsync(ctx, elements);
                     break;
@@ -2963,6 +2975,119 @@ namespace Dredis
             }
 
             WriteInteger(ctx, result.Removed);
+        }
+
+        private async Task HandlePfAddAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count < 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'pfadd' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var elements = new byte[args.Count - 2][];
+            for (int i = 2; i < args.Count; i++)
+            {
+                if (!TryGetBytes(args[i], out var value))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                elements[i - 2] = value;
+            }
+
+            var result = await _store.HyperLogLogAddAsync(key, elements).ConfigureAwait(false);
+            if (result.Status == HyperLogLogResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Key is not a valid HyperLogLog string value.");
+                return;
+            }
+
+            WriteInteger(ctx, result.Changed ? 1 : 0);
+            if (result.Changed)
+            {
+                Transactions.NotifyKeyModified(key, _store);
+            }
+        }
+
+        private async Task HandlePfCountAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count < 2)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'pfcount' command");
+                return;
+            }
+
+            var keys = new string[args.Count - 1];
+            for (int i = 1; i < args.Count; i++)
+            {
+                if (!TryGetString(args[i], out var key))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                keys[i - 1] = key;
+            }
+
+            var result = await _store.HyperLogLogCountAsync(keys).ConfigureAwait(false);
+            if (result.Status == HyperLogLogResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Key is not a valid HyperLogLog string value.");
+                return;
+            }
+
+            WriteInteger(ctx, result.Count);
+        }
+
+        private async Task HandlePfMergeAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count < 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'pfmerge' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var destinationKey))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var sourceKeys = new string[args.Count - 2];
+            for (int i = 2; i < args.Count; i++)
+            {
+                if (!TryGetString(args[i], out var sourceKey))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                sourceKeys[i - 2] = sourceKey;
+            }
+
+            var result = await _store.HyperLogLogMergeAsync(destinationKey, sourceKeys).ConfigureAwait(false);
+            if (result.Status == HyperLogLogResultStatus.WrongType)
+            {
+                WriteError(ctx, "WRONGTYPE Key is not a valid HyperLogLog string value.");
+                return;
+            }
+
+            WriteSimpleString(ctx, "OK");
+            Transactions.NotifyKeyModified(destinationKey, _store);
         }
 
         private async Task HandleVectorSetAsync(

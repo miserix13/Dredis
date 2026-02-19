@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Linq;
+using System.Numerics;
 using System.Text;
 using DotNetty.Buffers;
 using DotNetty.Codecs.Redis.Messages;
@@ -1662,6 +1663,137 @@ namespace Dredis.Tests
                 var response = ReadOutbound(channel);
                 var integer = Assert.IsType<IntegerRedisMessage>(response);
                 Assert.Equal(0, integer.Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task HyperLogLog_PfAdd_ThenPfCount_ReturnsApproximateCount()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("PFADD", "hll", "a", "b", "c"));
+                channel.RunPendingTasks();
+                var addResponse = ReadOutbound(channel);
+                var added = Assert.IsType<IntegerRedisMessage>(addResponse);
+                Assert.Equal(1, added.Value);
+
+                channel.WriteInbound(Command("PFADD", "hll", "a", "b", "c"));
+                channel.RunPendingTasks();
+                var addAgainResponse = ReadOutbound(channel);
+                var addAgain = Assert.IsType<IntegerRedisMessage>(addAgainResponse);
+                Assert.Equal(0, addAgain.Value);
+
+                channel.WriteInbound(Command("PFCOUNT", "hll"));
+                channel.RunPendingTasks();
+                var countResponse = ReadOutbound(channel);
+                var count = Assert.IsType<IntegerRedisMessage>(countResponse);
+                Assert.InRange(count.Value, 1, 10);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task HyperLogLog_PfCount_MultiKey_ComputesUnion()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("PFADD", "hll:1", "a", "b", "c"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("PFADD", "hll:2", "c", "d", "e"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("PFCOUNT", "hll:1"));
+                channel.RunPendingTasks();
+                var singleResponse = ReadOutbound(channel);
+                var single = Assert.IsType<IntegerRedisMessage>(singleResponse);
+
+                channel.WriteInbound(Command("PFCOUNT", "hll:1", "hll:2"));
+                channel.RunPendingTasks();
+                var unionResponse = ReadOutbound(channel);
+                var union = Assert.IsType<IntegerRedisMessage>(unionResponse);
+
+                Assert.True(union.Value >= single.Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task HyperLogLog_PfMerge_CreatesMergedSketch()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("PFADD", "left", "x", "y"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("PFADD", "right", "y", "z"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("PFMERGE", "merged", "left", "right"));
+                channel.RunPendingTasks();
+                var mergeResponse = ReadOutbound(channel);
+                var mergeOk = Assert.IsType<SimpleStringRedisMessage>(mergeResponse);
+                Assert.Equal("OK", mergeOk.Content);
+
+                channel.WriteInbound(Command("PFCOUNT", "left"));
+                channel.RunPendingTasks();
+                var leftResponse = ReadOutbound(channel);
+                var leftCount = Assert.IsType<IntegerRedisMessage>(leftResponse);
+
+                channel.WriteInbound(Command("PFCOUNT", "merged"));
+                channel.RunPendingTasks();
+                var mergedResponse = ReadOutbound(channel);
+                var mergedCount = Assert.IsType<IntegerRedisMessage>(mergedResponse);
+
+                Assert.True(mergedCount.Value >= leftCount.Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task HyperLogLog_PfAdd_OnPlainString_ReturnsWrongType()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("SET", "not-hll", "value"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("PFADD", "not-hll", "a"));
+                channel.RunPendingTasks();
+                var response = ReadOutbound(channel);
+
+                var error = Assert.IsType<ErrorRedisMessage>(response);
+                Assert.Equal("WRONGTYPE Key is not a valid HyperLogLog string value.", error.Content);
             }
             finally
             {
@@ -3945,6 +4077,9 @@ namespace Dredis.Tests
         private readonly Dictionary<string, Dictionary<string, StreamGroupState>> _streamGroups = new(StringComparer.Ordinal);
         private readonly Dictionary<string, DateTimeOffset?> _expirations = new(StringComparer.Ordinal);
         private static readonly Encoding Utf8 = new UTF8Encoding(false);
+        private static readonly byte[] HyperLogLogMagic = Encoding.ASCII.GetBytes("DHLL");
+        private const int HyperLogLogPrecision = 14;
+        private const int HyperLogLogRegistersCount = 1 << HyperLogLogPrecision;
 
         /// <summary>
         /// Internal stream entry model used for test storage.
@@ -4748,6 +4883,145 @@ namespace Dredis.Tests
             {
                 return Task.FromResult(new JsonMGetResult(JsonResultStatus.InvalidJson));
             }
+        }
+
+        public Task<HyperLogLogAddResult> HyperLogLogAddAsync(
+            string key,
+            byte[][] elements,
+            CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+            }
+
+            if (_hashes.ContainsKey(key) || _lists.ContainsKey(key) || _sets.ContainsKey(key) || _sortedSets.ContainsKey(key) || _vectors.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+            {
+                return Task.FromResult(new HyperLogLogAddResult(HyperLogLogResultStatus.WrongType, false));
+            }
+
+            byte[] registers;
+            if (_data.TryGetValue(key, out var existing))
+            {
+                if (!TryDecodeHyperLogLog(existing, out registers))
+                {
+                    return Task.FromResult(new HyperLogLogAddResult(HyperLogLogResultStatus.WrongType, false));
+                }
+            }
+            else
+            {
+                registers = new byte[HyperLogLogRegistersCount];
+            }
+
+            var changed = false;
+            foreach (var element in elements)
+            {
+                var hash = ComputeHyperLogLogHash(element);
+                var index = (int)(hash >> (64 - HyperLogLogPrecision));
+                var rank = ComputeHyperLogLogRank(hash);
+                if (rank > registers[index])
+                {
+                    registers[index] = (byte)rank;
+                    changed = true;
+                }
+            }
+
+            _data[key] = EncodeHyperLogLog(registers);
+            return Task.FromResult(new HyperLogLogAddResult(HyperLogLogResultStatus.Ok, changed));
+        }
+
+        public Task<HyperLogLogCountResult> HyperLogLogCountAsync(
+            string[] keys,
+            CancellationToken token = default)
+        {
+            var unionRegisters = new byte[HyperLogLogRegistersCount];
+
+            foreach (var key in keys)
+            {
+                if (IsExpired(key))
+                {
+                    RemoveKey(key);
+                    continue;
+                }
+
+                if (_hashes.ContainsKey(key) || _lists.ContainsKey(key) || _sets.ContainsKey(key) || _sortedSets.ContainsKey(key) || _vectors.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+                {
+                    return Task.FromResult(new HyperLogLogCountResult(HyperLogLogResultStatus.WrongType, 0));
+                }
+
+                if (!_data.TryGetValue(key, out var existing))
+                {
+                    continue;
+                }
+
+                if (!TryDecodeHyperLogLog(existing, out var registers))
+                {
+                    return Task.FromResult(new HyperLogLogCountResult(HyperLogLogResultStatus.WrongType, 0));
+                }
+
+                for (int i = 0; i < unionRegisters.Length; i++)
+                {
+                    if (registers[i] > unionRegisters[i])
+                    {
+                        unionRegisters[i] = registers[i];
+                    }
+                }
+            }
+
+            var estimate = EstimateHyperLogLogCount(unionRegisters);
+            return Task.FromResult(new HyperLogLogCountResult(HyperLogLogResultStatus.Ok, estimate));
+        }
+
+        public Task<HyperLogLogMergeResult> HyperLogLogMergeAsync(
+            string destinationKey,
+            string[] sourceKeys,
+            CancellationToken token = default)
+        {
+            if (IsExpired(destinationKey))
+            {
+                RemoveKey(destinationKey);
+            }
+
+            if (_hashes.ContainsKey(destinationKey) || _lists.ContainsKey(destinationKey) || _sets.ContainsKey(destinationKey) || _sortedSets.ContainsKey(destinationKey) || _vectors.ContainsKey(destinationKey) || _streams.ContainsKey(destinationKey) || _streamGroups.ContainsKey(destinationKey))
+            {
+                return Task.FromResult(new HyperLogLogMergeResult(HyperLogLogResultStatus.WrongType));
+            }
+
+            var mergedRegisters = new byte[HyperLogLogRegistersCount];
+            foreach (var key in sourceKeys)
+            {
+                if (IsExpired(key))
+                {
+                    RemoveKey(key);
+                    continue;
+                }
+
+                if (_hashes.ContainsKey(key) || _lists.ContainsKey(key) || _sets.ContainsKey(key) || _sortedSets.ContainsKey(key) || _vectors.ContainsKey(key) || _streams.ContainsKey(key) || _streamGroups.ContainsKey(key))
+                {
+                    return Task.FromResult(new HyperLogLogMergeResult(HyperLogLogResultStatus.WrongType));
+                }
+
+                if (!_data.TryGetValue(key, out var existing))
+                {
+                    continue;
+                }
+
+                if (!TryDecodeHyperLogLog(existing, out var registers))
+                {
+                    return Task.FromResult(new HyperLogLogMergeResult(HyperLogLogResultStatus.WrongType));
+                }
+
+                for (int i = 0; i < mergedRegisters.Length; i++)
+                {
+                    if (registers[i] > mergedRegisters[i])
+                    {
+                        mergedRegisters[i] = registers[i];
+                    }
+                }
+            }
+
+            _data[destinationKey] = EncodeHyperLogLog(mergedRegisters);
+            return Task.FromResult(new HyperLogLogMergeResult(HyperLogLogResultStatus.Ok));
         }
 
         public Task<VectorSetResult> VectorSetAsync(
@@ -6938,6 +7212,105 @@ namespace Dredis.Tests
             }
 
             return Task.FromResult(new SortedSetRemoveRangeResult(SortedSetResultStatus.Ok, toRemove.Count));
+        }
+
+        private static ulong ComputeHyperLogLogHash(byte[] data)
+        {
+            unchecked
+            {
+                ulong hash = 14695981039346656037UL;
+                for (int i = 0; i < data.Length; i++)
+                {
+                    hash ^= data[i];
+                    hash *= 1099511628211UL;
+                }
+
+                hash ^= hash >> 33;
+                hash *= 0xff51afd7ed558ccdUL;
+                hash ^= hash >> 33;
+                hash *= 0xc4ceb9fe1a85ec53UL;
+                hash ^= hash >> 33;
+
+                return hash;
+            }
+        }
+
+        private static int ComputeHyperLogLogRank(ulong hash)
+        {
+            var remaining = hash << HyperLogLogPrecision;
+            var rank = BitOperations.LeadingZeroCount(remaining) + 1;
+            var maxRank = 64 - HyperLogLogPrecision + 1;
+            return Math.Min(rank, maxRank);
+        }
+
+        private static byte[] EncodeHyperLogLog(byte[] registers)
+        {
+            var payload = new byte[HyperLogLogMagic.Length + 1 + 2 + HyperLogLogRegistersCount];
+            Buffer.BlockCopy(HyperLogLogMagic, 0, payload, 0, HyperLogLogMagic.Length);
+            payload[4] = 1;
+            payload[5] = (byte)HyperLogLogPrecision;
+            payload[6] = 0;
+            Buffer.BlockCopy(registers, 0, payload, 7, HyperLogLogRegistersCount);
+            return payload;
+        }
+
+        private static bool TryDecodeHyperLogLog(byte[] payload, out byte[] registers)
+        {
+            registers = Array.Empty<byte>();
+
+            var expectedLength = HyperLogLogMagic.Length + 1 + 2 + HyperLogLogRegistersCount;
+            if (payload.Length != expectedLength)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < HyperLogLogMagic.Length; i++)
+            {
+                if (payload[i] != HyperLogLogMagic[i])
+                {
+                    return false;
+                }
+            }
+
+            if (payload[4] != 1 || payload[5] != HyperLogLogPrecision)
+            {
+                return false;
+            }
+
+            registers = new byte[HyperLogLogRegistersCount];
+            Buffer.BlockCopy(payload, 7, registers, 0, HyperLogLogRegistersCount);
+            return true;
+        }
+
+        private static long EstimateHyperLogLogCount(byte[] registers)
+        {
+            const double alpha = 0.7213 / (1.0 + (1.079 / HyperLogLogRegistersCount));
+            double invSum = 0.0;
+            var zeroCount = 0;
+
+            for (int i = 0; i < registers.Length; i++)
+            {
+                var registerValue = registers[i];
+                if (registerValue == 0)
+                {
+                    zeroCount++;
+                }
+
+                invSum += Math.Pow(2.0, -registerValue);
+            }
+
+            var estimate = alpha * HyperLogLogRegistersCount * HyperLogLogRegistersCount / invSum;
+            if (estimate <= 2.5 * HyperLogLogRegistersCount && zeroCount > 0)
+            {
+                estimate = HyperLogLogRegistersCount * Math.Log((double)HyperLogLogRegistersCount / zeroCount);
+            }
+
+            if (estimate < 0)
+            {
+                return 0;
+            }
+
+            return (long)Math.Round(estimate, MidpointRounding.AwayFromZero);
         }
 
         /// <summary>

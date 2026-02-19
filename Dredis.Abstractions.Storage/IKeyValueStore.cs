@@ -935,6 +935,82 @@ namespace Dredis.Abstractions.Storage
     }
 
     /// <summary>
+    /// Describes results of HyperLogLog operations.
+    /// </summary>
+    public enum HyperLogLogResultStatus
+    {
+        Ok,
+        WrongType
+    }
+
+    /// <summary>
+    /// Represents a result for HyperLogLog add operations.
+    /// </summary>
+    public sealed class HyperLogLogAddResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="HyperLogLogAddResult"/> class.
+        /// </summary>
+        public HyperLogLogAddResult(HyperLogLogResultStatus status, bool changed)
+        {
+            Status = status;
+            Changed = changed;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public HyperLogLogResultStatus Status { get; }
+        /// <summary>
+        /// Gets whether at least one register changed.
+        /// </summary>
+        public bool Changed { get; }
+    }
+
+    /// <summary>
+    /// Represents a result for HyperLogLog count operations.
+    /// </summary>
+    public sealed class HyperLogLogCountResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="HyperLogLogCountResult"/> class.
+        /// </summary>
+        public HyperLogLogCountResult(HyperLogLogResultStatus status, long count)
+        {
+            Status = status;
+            Count = count;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public HyperLogLogResultStatus Status { get; }
+        /// <summary>
+        /// Gets the approximate cardinality.
+        /// </summary>
+        public long Count { get; }
+    }
+
+    /// <summary>
+    /// Represents a result for HyperLogLog merge operations.
+    /// </summary>
+    public sealed class HyperLogLogMergeResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="HyperLogLogMergeResult"/> class.
+        /// </summary>
+        public HyperLogLogMergeResult(HyperLogLogResultStatus status)
+        {
+            Status = status;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public HyperLogLogResultStatus Status { get; }
+    }
+
+    /// <summary>
     /// Describes results of vector operations.
     /// </summary>
     public enum VectorResultStatus
@@ -1997,6 +2073,40 @@ namespace Dredis.Abstractions.Storage
         Task<JsonMGetResult> JsonMgetAsync(
             string[] keys,
             string path,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Adds one or more elements to a HyperLogLog sketch.
+        /// </summary>
+        /// <param name="key">The HyperLogLog key.</param>
+        /// <param name="elements">The elements to add.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains status and whether the sketch changed.</returns>
+        Task<HyperLogLogAddResult> HyperLogLogAddAsync(
+            string key,
+            byte[][] elements,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Returns the approximate cardinality for one or more HyperLogLog sketches.
+        /// </summary>
+        /// <param name="keys">The HyperLogLog keys.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains status and approximate cardinality.</returns>
+        Task<HyperLogLogCountResult> HyperLogLogCountAsync(
+            string[] keys,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Merges one or more HyperLogLog sketches into a destination sketch.
+        /// </summary>
+        /// <param name="destinationKey">The destination HyperLogLog key.</param>
+        /// <param name="sourceKeys">The source HyperLogLog keys.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result contains merge status.</returns>
+        Task<HyperLogLogMergeResult> HyperLogLogMergeAsync(
+            string destinationKey,
+            string[] sourceKeys,
             CancellationToken token = default);
 
         /// <summary>
