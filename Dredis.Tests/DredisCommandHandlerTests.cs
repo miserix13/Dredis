@@ -1691,6 +1691,132 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        public async Task Vector_Search_LimitSyntax_WorksWithoutPositionalTopK()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("VSET", "emb:a", "1", "0"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("VSET", "emb:b", "0.8", "0.2"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("VSEARCH", "emb:", "COSINE", "LIMIT", "1", "1", "0"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var array = Assert.IsType<ArrayRedisMessage>(response);
+                Assert.Equal(2, array.Children.Count);
+                Assert.Equal("emb:a", GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(array.Children[0])));
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task Vector_Search_LimitMissing_ReturnsError()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("VSEARCH", "emb:", "COSINE", "1", "0"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var error = Assert.IsType<ErrorRedisMessage>(response);
+                Assert.Equal("ERR LIMIT is required", error.Content);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task Vector_Search_OffsetBeforeLimit_ReturnsSyntaxError()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("VSET", "emb:a", "1", "0"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("VSEARCH", "emb:", "COSINE", "OFFSET", "1", "LIMIT", "1", "1", "0"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var error = Assert.IsType<ErrorRedisMessage>(response);
+                Assert.Equal("ERR LIMIT is required", error.Content);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task Vector_Search_LimitInPositionalForm_ReturnsSyntaxError()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("VSET", "emb:a", "1", "0"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("VSEARCH", "emb:", "2", "COSINE", "LIMIT", "1", "1", "0"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var error = Assert.IsType<ErrorRedisMessage>(response);
+                Assert.Equal("ERR syntax error", error.Content);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task Vector_Search_DuplicateOffset_ReturnsSyntaxError()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("VSET", "emb:a", "1", "0"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("VSEARCH", "emb:", "2", "COSINE", "OFFSET", "0", "OFFSET", "1", "1", "0"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var error = Assert.IsType<ErrorRedisMessage>(response);
+                Assert.Equal("ERR syntax error", error.Content);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
         public async Task Publish_NoSubscribers_ReturnsZero()
         {
             DredisCommandHandler.PubSubManager.Clear();

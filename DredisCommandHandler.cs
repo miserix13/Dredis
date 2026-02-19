@@ -2343,48 +2343,130 @@ namespace Dredis
             IChannelHandlerContext ctx,
             IList<IRedisMessage> args)
         {
-            if (args.Count < 6)
+            if (args.Count < 5)
             {
                 WriteError(ctx, "ERR wrong number of arguments for 'vsearch' command");
                 return;
             }
 
-            if (!TryGetString(args[1], out var keyPrefix) ||
-                !TryGetString(args[2], out var topKText) ||
-                !TryGetString(args[3], out var metric))
+            if (!TryGetString(args[1], out var keyPrefix))
             {
                 WriteError(ctx, "ERR null bulk string");
                 return;
             }
 
-            if (!int.TryParse(topKText, out var topK) || topK <= 0)
+            if (!TryGetString(args[2], out var token2))
             {
-                WriteError(ctx, "ERR value is not an integer or out of range");
+                WriteError(ctx, "ERR null bulk string");
                 return;
             }
 
+            int topK;
             int offset = 0;
-            int vectorStartIndex = 4;
-            if (args.Count >= 7 && TryGetString(args[4], out var offsetToken) &&
-                string.Equals(offsetToken, "OFFSET", StringComparison.OrdinalIgnoreCase))
+            string metric;
+            int index;
+            bool positionalForm;
+
+            if (int.TryParse(token2, out var positionalTopK))
             {
-                if (!TryGetString(args[5], out var offsetText) || !int.TryParse(offsetText, out offset) || offset < 0)
+                if (positionalTopK <= 0)
                 {
                     WriteError(ctx, "ERR value is not an integer or out of range");
                     return;
                 }
 
-                vectorStartIndex = 6;
+                topK = positionalTopK;
+                if (!TryGetString(args[3], out metric))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                index = 4;
+                positionalForm = true;
+            }
+            else
+            {
+                metric = token2;
+                topK = -1;
+                index = 3;
+                positionalForm = false;
             }
 
-            if (args.Count <= vectorStartIndex)
+            if (positionalForm)
+            {
+                if (index + 1 < args.Count && TryGetString(args[index], out var option))
+                {
+                    if (option.Equals("LIMIT", StringComparison.OrdinalIgnoreCase))
+                    {
+                        WriteError(ctx, "ERR syntax error");
+                        return;
+                    }
+
+                    if (option.Equals("OFFSET", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (!TryGetString(args[index + 1], out var offsetText) || !int.TryParse(offsetText, out offset) || offset < 0)
+                        {
+                            WriteError(ctx, "ERR value is not an integer or out of range");
+                            return;
+                        }
+
+                        index += 2;
+                    }
+                }
+            }
+            else
+            {
+                if (args.Count < 4)
+                {
+                    WriteError(ctx, "ERR wrong number of arguments for 'vsearch' command");
+                    return;
+                }
+
+                if (!TryGetString(args[index], out var limitToken) ||
+                    !limitToken.Equals("LIMIT", StringComparison.OrdinalIgnoreCase))
+                {
+                    WriteError(ctx, "ERR LIMIT is required");
+                    return;
+                }
+
+                if (!TryGetString(args[index + 1], out var limitText) || !int.TryParse(limitText, out topK) || topK <= 0)
+                {
+                    WriteError(ctx, "ERR value is not an integer or out of range");
+                    return;
+                }
+
+                index += 2;
+
+                if (index + 1 < args.Count && TryGetString(args[index], out var offsetToken) &&
+                    offsetToken.Equals("OFFSET", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!TryGetString(args[index + 1], out var offsetText) || !int.TryParse(offsetText, out offset) || offset < 0)
+                    {
+                        WriteError(ctx, "ERR value is not an integer or out of range");
+                        return;
+                    }
+
+                    index += 2;
+                }
+            }
+
+            if (index < args.Count && TryGetString(args[index], out var unexpectedToken) &&
+                (unexpectedToken.Equals("LIMIT", StringComparison.OrdinalIgnoreCase) ||
+                 unexpectedToken.Equals("OFFSET", StringComparison.OrdinalIgnoreCase)))
+            {
+                WriteError(ctx, "ERR syntax error");
+                return;
+            }
+
+            if (args.Count <= index)
             {
                 WriteError(ctx, "ERR wrong number of arguments for 'vsearch' command");
                 return;
             }
 
-            var queryVector = new double[args.Count - vectorStartIndex];
-            for (int i = vectorStartIndex; i < args.Count; i++)
+            var queryVector = new double[args.Count - index];
+            for (int i = index; i < args.Count; i++)
             {
                 if (!TryGetString(args[i], out var valueText) ||
                     !double.TryParse(valueText, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) ||
@@ -2395,7 +2477,7 @@ namespace Dredis
                     return;
                 }
 
-                queryVector[i - vectorStartIndex] = value;
+                queryVector[i - index] = value;
             }
 
             var result = await _store.VectorSearchAsync(keyPrefix, topK, offset, metric, queryVector).ConfigureAwait(false);
