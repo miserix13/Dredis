@@ -773,6 +773,14 @@ namespace Dredis
                     await HandleBitCountAsync(ctx, elements);
                     break;
 
+                case "BITOP":
+                    await HandleBitOpAsync(ctx, elements);
+                    break;
+
+                case "BITPOS":
+                    await HandleBitPosAsync(ctx, elements);
+                    break;
+
                 case "BITFIELD":
                     await HandleBitFieldAsync(ctx, elements);
                     break;
@@ -1634,6 +1642,191 @@ namespace Dredis
             }
 
             WriteInteger(ctx, bitCount);
+        }
+
+        /// <summary>
+        /// Handles the BITOP command.
+        /// </summary>
+        private async Task HandleBitOpAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count < 4)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'bitop' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var operationText) || !TryGetString(args[2], out var destinationKey))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var operation = operationText.ToUpperInvariant();
+            if (operation != "AND" && operation != "OR" && operation != "XOR" && operation != "NOT")
+            {
+                WriteError(ctx, "ERR syntax error");
+                return;
+            }
+
+            var sourceCount = args.Count - 3;
+            if (operation == "NOT" && sourceCount != 1)
+            {
+                WriteError(ctx, "ERR BITOP NOT must be called with a single source key.");
+                return;
+            }
+
+            var sourceValues = new byte[sourceCount][];
+            var maxLength = 0;
+
+            for (int i = 0; i < sourceCount; i++)
+            {
+                if (!TryGetString(args[i + 3], out var sourceKey))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                var value = await _store.GetAsync(sourceKey).ConfigureAwait(false) ?? Array.Empty<byte>();
+                sourceValues[i] = value;
+
+                if (value.Length > maxLength)
+                {
+                    maxLength = value.Length;
+                }
+            }
+
+            var resultLength = operation == "NOT" ? sourceValues[0].Length : maxLength;
+            var result = new byte[resultLength];
+
+            for (int byteIndex = 0; byteIndex < resultLength; byteIndex++)
+            {
+                switch (operation)
+                {
+                    case "AND":
+                        byte andByte = 0xFF;
+                        for (int sourceIndex = 0; sourceIndex < sourceCount; sourceIndex++)
+                        {
+                            andByte &= GetByteAt(sourceValues[sourceIndex], byteIndex);
+                        }
+
+                        result[byteIndex] = andByte;
+                        break;
+
+                    case "OR":
+                        byte orByte = 0x00;
+                        for (int sourceIndex = 0; sourceIndex < sourceCount; sourceIndex++)
+                        {
+                            orByte |= GetByteAt(sourceValues[sourceIndex], byteIndex);
+                        }
+
+                        result[byteIndex] = orByte;
+                        break;
+
+                    case "XOR":
+                        byte xorByte = 0x00;
+                        for (int sourceIndex = 0; sourceIndex < sourceCount; sourceIndex++)
+                        {
+                            xorByte ^= GetByteAt(sourceValues[sourceIndex], byteIndex);
+                        }
+
+                        result[byteIndex] = xorByte;
+                        break;
+
+                    default:
+                        result[byteIndex] = (byte)~GetByteAt(sourceValues[0], byteIndex);
+                        break;
+                }
+            }
+
+            await _store.SetAsync(destinationKey, result, null, SetCondition.None).ConfigureAwait(false);
+            Transactions.NotifyKeyModified(destinationKey, _store);
+            WriteInteger(ctx, resultLength);
+        }
+
+        /// <summary>
+        /// Handles the BITPOS command.
+        /// </summary>
+        private async Task HandleBitPosAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count < 3 || args.Count > 6)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'bitpos' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key) || !TryGetString(args[2], out var bitText))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            if (!int.TryParse(bitText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var targetBit) || (targetBit != 0 && targetBit != 1))
+            {
+                WriteError(ctx, "ERR The bit argument must be 1 or 0.");
+                return;
+            }
+
+            long? start = null;
+            long? end = null;
+            var useBitUnit = false;
+
+            if (args.Count >= 4)
+            {
+                if (!TryGetString(args[3], out var startText) ||
+                    !long.TryParse(startText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedStart))
+                {
+                    WriteError(ctx, "ERR value is not an integer or out of range");
+                    return;
+                }
+
+                start = parsedStart;
+            }
+
+            if (args.Count >= 5)
+            {
+                if (!TryGetString(args[4], out var endText) ||
+                    !long.TryParse(endText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedEnd))
+                {
+                    WriteError(ctx, "ERR value is not an integer or out of range");
+                    return;
+                }
+
+                end = parsedEnd;
+            }
+
+            if (args.Count == 6)
+            {
+                if (!TryGetString(args[5], out var unitText))
+                {
+                    WriteError(ctx, "ERR syntax error");
+                    return;
+                }
+
+                unitText = unitText.ToUpperInvariant();
+                if (unitText == "BYTE")
+                {
+                    useBitUnit = false;
+                }
+                else if (unitText == "BIT")
+                {
+                    useBitUnit = true;
+                }
+                else
+                {
+                    WriteError(ctx, "ERR syntax error");
+                    return;
+                }
+            }
+
+            var value = await _store.GetAsync(key).ConfigureAwait(false) ?? Array.Empty<byte>();
+            var position = useBitUnit
+                ? FindBitPositionByBit(value, targetBit, start, end)
+                : FindBitPositionByByte(value, targetBit, start, end);
+            WriteInteger(ctx, position);
         }
 
         /// <summary>
@@ -5884,6 +6077,157 @@ namespace Dredis
 
             var raw = (ulong)value;
             return raw & mask;
+        }
+
+        /// <summary>
+        /// Gets a byte at an index or zero when out of range.
+        /// </summary>
+        private static byte GetByteAt(byte[] value, int index)
+        {
+            if (index < 0 || index >= value.Length)
+            {
+                return 0;
+            }
+
+            return value[index];
+        }
+
+        /// <summary>
+        /// Finds the first matching bit position using byte index range semantics.
+        /// </summary>
+        private static long FindBitPositionByByte(byte[] value, int targetBit, long? start, long? end)
+        {
+            var byteLength = value.LongLength;
+            var startByte = start ?? 0;
+            if (startByte < 0)
+            {
+                startByte += byteLength;
+            }
+
+            if (startByte < 0)
+            {
+                startByte = 0;
+            }
+
+            var bounded = end.HasValue;
+            long endByte;
+
+            if (bounded)
+            {
+                endByte = end!.Value;
+                if (endByte < 0)
+                {
+                    endByte += byteLength;
+                }
+
+                if (startByte > endByte || startByte >= byteLength || endByte < 0)
+                {
+                    return -1;
+                }
+
+                if (endByte >= byteLength)
+                {
+                    endByte = byteLength - 1;
+                }
+            }
+            else
+            {
+                if (startByte >= byteLength)
+                {
+                    return targetBit == 0 ? startByte * 8 : -1;
+                }
+
+                endByte = byteLength - 1;
+            }
+
+            for (long byteIndex = startByte; byteIndex <= endByte; byteIndex++)
+            {
+                var current = value[byteIndex];
+                if ((targetBit == 1 && current == 0) || (targetBit == 0 && current == 0xFF))
+                {
+                    continue;
+                }
+
+                for (int bit = 0; bit < 8; bit++)
+                {
+                    var actual = (current >> (7 - bit)) & 1;
+                    if (actual == targetBit)
+                    {
+                        return (byteIndex * 8) + bit;
+                    }
+                }
+            }
+
+            if (!bounded && targetBit == 0)
+            {
+                return byteLength * 8;
+            }
+
+            return -1;
+        }
+
+        /// <summary>
+        /// Finds the first matching bit position using bit index range semantics.
+        /// </summary>
+        private static long FindBitPositionByBit(byte[] value, int targetBit, long? start, long? end)
+        {
+            var bitLength = value.LongLength * 8;
+            var startBit = start ?? 0;
+            if (startBit < 0)
+            {
+                startBit += bitLength;
+            }
+
+            if (startBit < 0)
+            {
+                startBit = 0;
+            }
+
+            var bounded = end.HasValue;
+            long endBit;
+
+            if (bounded)
+            {
+                endBit = end!.Value;
+                if (endBit < 0)
+                {
+                    endBit += bitLength;
+                }
+
+                if (bitLength == 0 || startBit > endBit || startBit >= bitLength || endBit < 0)
+                {
+                    return -1;
+                }
+
+                if (endBit >= bitLength)
+                {
+                    endBit = bitLength - 1;
+                }
+            }
+            else
+            {
+                if (startBit >= bitLength)
+                {
+                    return targetBit == 0 ? startBit : -1;
+                }
+
+                endBit = bitLength - 1;
+            }
+
+            for (long position = startBit; position <= endBit; position++)
+            {
+                if (GetBitmapBit(value, position) == targetBit)
+                {
+                    return position;
+                }
+            }
+
+            if (!bounded && targetBit == 0)
+            {
+                return bitLength;
+            }
+
+            return -1;
         }
 
         /// <summary>

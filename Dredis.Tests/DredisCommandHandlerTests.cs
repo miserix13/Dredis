@@ -474,6 +474,135 @@ namespace Dredis.Tests
 
         [Fact]
         /// <summary>
+        /// Verifies BITOP supports AND/OR/XOR/NOT over string bitmaps.
+        /// </summary>
+        public async Task BitOp_AndOrXorNot_ReturnExpectedResults()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("SETBIT", "k1", "0", "1"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("SETBIT", "k1", "7", "1"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("SETBIT", "k2", "1", "1"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("SETBIT", "k2", "7", "1"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("BITOP", "AND", "k_and", "k1", "k2"));
+                channel.RunPendingTasks();
+                Assert.Equal(1, Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel)).Value);
+
+                channel.WriteInbound(Command("BITCOUNT", "k_and"));
+                channel.RunPendingTasks();
+                Assert.Equal(1, Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel)).Value);
+
+                channel.WriteInbound(Command("BITOP", "OR", "k_or", "k1", "k2"));
+                channel.RunPendingTasks();
+                Assert.Equal(1, Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel)).Value);
+
+                channel.WriteInbound(Command("BITCOUNT", "k_or"));
+                channel.RunPendingTasks();
+                Assert.Equal(3, Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel)).Value);
+
+                channel.WriteInbound(Command("BITOP", "XOR", "k_xor", "k1", "k2"));
+                channel.RunPendingTasks();
+                Assert.Equal(1, Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel)).Value);
+
+                channel.WriteInbound(Command("BITCOUNT", "k_xor"));
+                channel.RunPendingTasks();
+                Assert.Equal(2, Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel)).Value);
+
+                channel.WriteInbound(Command("BITOP", "NOT", "k_not", "k1"));
+                channel.RunPendingTasks();
+                Assert.Equal(1, Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel)).Value);
+
+                channel.WriteInbound(Command("BITCOUNT", "k_not"));
+                channel.RunPendingTasks();
+                Assert.Equal(6, Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel)).Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
+        /// Verifies BITPOS supports default, bounded, and BIT-unit range searches.
+        /// </summary>
+        public async Task BitPos_DefaultAndRangeModes_ReturnExpectedPositions()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("SETBIT", "bp", "1", "1"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("SETBIT", "bp", "15", "1"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("BITPOS", "bp", "1"));
+                channel.RunPendingTasks();
+                Assert.Equal(1, Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel)).Value);
+
+                channel.WriteInbound(Command("BITPOS", "bp", "0"));
+                channel.RunPendingTasks();
+                Assert.Equal(0, Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel)).Value);
+
+                channel.WriteInbound(Command("BITPOS", "bp", "1", "1", "1", "BYTE"));
+                channel.RunPendingTasks();
+                Assert.Equal(15, Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel)).Value);
+
+                channel.WriteInbound(Command("BITPOS", "bp", "1", "8", "15", "BIT"));
+                channel.RunPendingTasks();
+                Assert.Equal(15, Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel)).Value);
+
+                for (int i = 0; i < 8; i++)
+                {
+                    channel.WriteInbound(Command("SETBIT", "full", i.ToString(CultureInfo.InvariantCulture), "1"));
+                    channel.RunPendingTasks();
+                    _ = ReadOutbound(channel);
+                }
+
+                channel.WriteInbound(Command("BITPOS", "full", "0"));
+                channel.RunPendingTasks();
+                Assert.Equal(8, Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel)).Value);
+
+                channel.WriteInbound(Command("BITPOS", "full", "0", "0", "0"));
+                channel.RunPendingTasks();
+                Assert.Equal(-1, Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel)).Value);
+
+                channel.WriteInbound(Command("BITPOS", "missing", "1"));
+                channel.RunPendingTasks();
+                Assert.Equal(-1, Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel)).Value);
+
+                channel.WriteInbound(Command("BITPOS", "missing", "0"));
+                channel.RunPendingTasks();
+                Assert.Equal(0, Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel)).Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
         /// Verifies EXPIRE and TTL report remaining seconds.
         /// </summary>
         public async Task Expire_Ttl_ReturnsRemainingSeconds()
