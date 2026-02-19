@@ -2612,6 +2612,131 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        public async Task TimeSeries_OnDuplicatePolicy_AppliesConfiguredBehavior()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("TS.CREATE", "ts:dup", "ON_DUPLICATE", "SUM"));
+                channel.RunPendingTasks();
+                _ = Assert.IsType<SimpleStringRedisMessage>(ReadOutbound(channel));
+
+                channel.WriteInbound(Command("TS.ADD", "ts:dup", "1000", "2"));
+                channel.RunPendingTasks();
+                _ = Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel));
+
+                channel.WriteInbound(Command("TS.ADD", "ts:dup", "1000", "3"));
+                channel.RunPendingTasks();
+                _ = Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel));
+
+                channel.WriteInbound(Command("TS.RANGE", "ts:dup", "1000", "1000"));
+                channel.RunPendingTasks();
+                var range = Assert.IsType<ArrayRedisMessage>(ReadOutbound(channel));
+                var sample = Assert.IsType<ArrayRedisMessage>(range.Children[0]);
+                Assert.Equal("5", GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(sample.Children[1])));
+
+                channel.WriteInbound(Command("TS.CREATE", "ts:block", "ON_DUPLICATE", "BLOCK"));
+                channel.RunPendingTasks();
+                _ = Assert.IsType<SimpleStringRedisMessage>(ReadOutbound(channel));
+
+                channel.WriteInbound(Command("TS.ADD", "ts:block", "1000", "1"));
+                channel.RunPendingTasks();
+                _ = Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel));
+
+                channel.WriteInbound(Command("TS.ADD", "ts:block", "1000", "9"));
+                channel.RunPendingTasks();
+                var blocked = Assert.IsType<ErrorRedisMessage>(ReadOutbound(channel));
+                Assert.Equal("ERR TSDB: Error at upsert, update is not supported when DUPLICATE_POLICY is set to BLOCK mode", blocked.Content);
+
+                channel.WriteInbound(Command("TS.ADD", "ts:block", "1000", "9", "ON_DUPLICATE", "MAX"));
+                channel.RunPendingTasks();
+                _ = Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel));
+
+                channel.WriteInbound(Command("TS.RANGE", "ts:block", "1000", "1000"));
+                channel.RunPendingTasks();
+                var maxRange = Assert.IsType<ArrayRedisMessage>(ReadOutbound(channel));
+                var maxSample = Assert.IsType<ArrayRedisMessage>(maxRange.Children[0]);
+                Assert.Equal("9", GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(maxSample.Children[1])));
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        public async Task TimeSeries_LabelsAndMultiRange_FilterByLabels()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("TS.CREATE", "ts:cpu:a", "LABELS", "host", "a", "region", "west"));
+                channel.RunPendingTasks();
+                _ = Assert.IsType<SimpleStringRedisMessage>(ReadOutbound(channel));
+
+                channel.WriteInbound(Command("TS.CREATE", "ts:cpu:b", "LABELS", "host", "b", "region", "west"));
+                channel.RunPendingTasks();
+                _ = Assert.IsType<SimpleStringRedisMessage>(ReadOutbound(channel));
+
+                channel.WriteInbound(Command("TS.ADD", "ts:cpu:a", "1000", "1"));
+                channel.RunPendingTasks();
+                _ = Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel));
+
+                channel.WriteInbound(Command("TS.ADD", "ts:cpu:b", "1000", "2"));
+                channel.RunPendingTasks();
+                _ = Assert.IsType<IntegerRedisMessage>(ReadOutbound(channel));
+
+                channel.WriteInbound(Command("TS.INFO", "ts:cpu:a"));
+                channel.RunPendingTasks();
+                var info = Assert.IsType<ArrayRedisMessage>(ReadOutbound(channel));
+                var infoFields = GetHashPairs(info.Children);
+                Assert.Equal("LAST", infoFields["duplicatePolicy"]);
+
+                var labelsIndex = -1;
+                for (int i = 0; i < info.Children.Count; i += 2)
+                {
+                    var field = GetBulkOrNull(info.Children[i]);
+                    if (field == "labels")
+                    {
+                        labelsIndex = i + 1;
+                        break;
+                    }
+                }
+
+                Assert.True(labelsIndex > 0);
+                var labels = Assert.IsType<ArrayRedisMessage>(info.Children[labelsIndex]);
+                var labelPairs = GetHashPairs(labels.Children);
+                Assert.Equal("a", labelPairs["host"]);
+                Assert.Equal("west", labelPairs["region"]);
+
+                channel.WriteInbound(Command("TS.MRANGE", "-", "+", "FILTER", "region=west", "host=a"));
+                channel.RunPendingTasks();
+                var mrange = Assert.IsType<ArrayRedisMessage>(ReadOutbound(channel));
+                Assert.Single(mrange.Children);
+
+                var entry = Assert.IsType<ArrayRedisMessage>(mrange.Children[0]);
+                Assert.Equal("ts:cpu:a", GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(entry.Children[0])));
+
+                var mrLabels = Assert.IsType<ArrayRedisMessage>(entry.Children[1]);
+                var mrLabelPairs = GetHashPairs(mrLabels.Children);
+                Assert.Equal("a", mrLabelPairs["host"]);
+
+                var samples = Assert.IsType<ArrayRedisMessage>(entry.Children[2]);
+                Assert.Single(samples.Children);
+                var mrSample = Assert.IsType<ArrayRedisMessage>(samples.Children[0]);
+                Assert.Equal("1", GetBulkString(Assert.IsType<FullBulkStringRedisMessage>(mrSample.Children[1])));
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
         public async Task Publish_NoSubscribers_ReturnsZero()
         {
             DredisCommandHandler.PubSubManager.Clear();
@@ -4475,6 +4600,8 @@ namespace Dredis.Tests
         private readonly Dictionary<string, TopKSketchModel> _topk = new(StringComparer.Ordinal);
         private readonly Dictionary<string, SortedDictionary<long, double>> _timeSeries = new(StringComparer.Ordinal);
         private readonly Dictionary<string, long> _timeSeriesRetention = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, TimeSeriesDuplicatePolicy> _timeSeriesDuplicatePolicy = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, KeyValuePair<string, string>[]> _timeSeriesLabels = new(StringComparer.Ordinal);
         private readonly Dictionary<string, DateTimeOffset?> _expirations = new(StringComparer.Ordinal);
         private static readonly Encoding Utf8 = new UTF8Encoding(false);
         private static readonly byte[] HyperLogLogMagic = Encoding.ASCII.GetBytes("DHLL");
@@ -4662,6 +4789,8 @@ namespace Dredis.Tests
             _topk.Remove(key);
             _timeSeries.Remove(key);
             _timeSeriesRetention.Remove(key);
+            _timeSeriesDuplicatePolicy.Remove(key);
+            _timeSeriesLabels.Remove(key);
             _expirations.Remove(key);
         }
 
@@ -4710,6 +4839,8 @@ namespace Dredis.Tests
             _topk.Remove(key);
             _timeSeries.Remove(key);
             _timeSeriesRetention.Remove(key);
+            _timeSeriesDuplicatePolicy.Remove(key);
+            _timeSeriesLabels.Remove(key);
 
             if (expiration.HasValue)
             {
@@ -4759,6 +4890,8 @@ namespace Dredis.Tests
                 _topk.Remove(item.Key);
                 _timeSeries.Remove(item.Key);
                 _timeSeriesRetention.Remove(item.Key);
+                _timeSeriesDuplicatePolicy.Remove(item.Key);
+                _timeSeriesLabels.Remove(item.Key);
                 _expirations.Remove(item.Key);
             }
 
@@ -6582,7 +6715,12 @@ namespace Dredis.Tests
             return Task.FromResult(new VectorSearchResult(VectorResultStatus.Ok, top));
         }
 
-        public Task<TimeSeriesResultStatus> TimeSeriesCreateAsync(string key, long? retentionTimeMs, CancellationToken token = default)
+        public Task<TimeSeriesResultStatus> TimeSeriesCreateAsync(
+            string key,
+            long? retentionTimeMs,
+            TimeSeriesDuplicatePolicy? duplicatePolicy,
+            KeyValuePair<string, string>[]? labels,
+            CancellationToken token = default)
         {
             if (IsExpired(key))
             {
@@ -6606,6 +6744,8 @@ namespace Dredis.Tests
 
             _timeSeries[key] = new SortedDictionary<long, double>();
             _timeSeriesRetention[key] = retentionTimeMs ?? 0;
+            _timeSeriesDuplicatePolicy[key] = duplicatePolicy ?? TimeSeriesDuplicatePolicy.Last;
+            _timeSeriesLabels[key] = NormalizeTimeSeriesLabels(labels);
             _data.Remove(key);
             return Task.FromResult(TimeSeriesResultStatus.Ok);
         }
@@ -6614,6 +6754,7 @@ namespace Dredis.Tests
             string key,
             long timestamp,
             double value,
+            TimeSeriesDuplicatePolicy? onDuplicate,
             bool createIfMissing,
             CancellationToken token = default)
         {
@@ -6655,9 +6796,41 @@ namespace Dredis.Tests
                 _tdigest.Remove(key);
                 _topk.Remove(key);
                 _timeSeriesRetention[key] = 0;
+                _timeSeriesDuplicatePolicy[key] = TimeSeriesDuplicatePolicy.Last;
+                _timeSeriesLabels[key] = Array.Empty<KeyValuePair<string, string>>();
             }
 
-            samples[timestamp] = value;
+            if (samples.TryGetValue(timestamp, out var existingValue))
+            {
+                var duplicatePolicy = onDuplicate ?? (_timeSeriesDuplicatePolicy.TryGetValue(key, out var configuredPolicy)
+                    ? configuredPolicy
+                    : TimeSeriesDuplicatePolicy.Last);
+
+                switch (duplicatePolicy)
+                {
+                    case TimeSeriesDuplicatePolicy.Block:
+                        return Task.FromResult(new TimeSeriesAddResult(TimeSeriesResultStatus.Exists, null));
+                    case TimeSeriesDuplicatePolicy.First:
+                        break;
+                    case TimeSeriesDuplicatePolicy.Min:
+                        samples[timestamp] = Math.Min(existingValue, value);
+                        break;
+                    case TimeSeriesDuplicatePolicy.Max:
+                        samples[timestamp] = Math.Max(existingValue, value);
+                        break;
+                    case TimeSeriesDuplicatePolicy.Sum:
+                        samples[timestamp] = existingValue + value;
+                        break;
+                    default:
+                        samples[timestamp] = value;
+                        break;
+                }
+            }
+            else
+            {
+                samples[timestamp] = value;
+            }
+
             ApplyTimeSeriesRetention(key, samples, timestamp);
             return Task.FromResult(new TimeSeriesAddResult(TimeSeriesResultStatus.Ok, timestamp));
         }
@@ -6694,6 +6867,8 @@ namespace Dredis.Tests
                 samples = new SortedDictionary<long, double>();
                 _timeSeries[key] = samples;
                 _timeSeriesRetention[key] = 0;
+                _timeSeriesDuplicatePolicy[key] = TimeSeriesDuplicatePolicy.Last;
+                _timeSeriesLabels[key] = Array.Empty<KeyValuePair<string, string>>();
             }
 
             var targetTimestamp = timestamp ?? (samples.Count > 0 ? samples.Last().Key : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
@@ -6760,7 +6935,155 @@ namespace Dredis.Tests
             {
                 return Task.FromResult(new TimeSeriesRangeResult(TimeSeriesResultStatus.NotFound, Array.Empty<TimeSeriesSample>()));
             }
+            var result = BuildTimeSeriesRangeSamples(samples, fromTimestamp, toTimestamp, reverse, count, aggregationType, bucketDurationMs);
+            return Task.FromResult(new TimeSeriesRangeResult(TimeSeriesResultStatus.Ok, result));
+        }
 
+        public Task<TimeSeriesMRangeResult> TimeSeriesMultiRangeAsync(
+            long fromTimestamp,
+            long toTimestamp,
+            bool reverse,
+            int? count,
+            string? aggregationType,
+            long? bucketDurationMs,
+            KeyValuePair<string, string>[] filters,
+            CancellationToken token = default)
+        {
+            if (count.HasValue && count.Value < 0)
+            {
+                return Task.FromResult(new TimeSeriesMRangeResult(TimeSeriesResultStatus.InvalidArgument, Array.Empty<TimeSeriesMRangeEntry>()));
+            }
+
+            if (!string.IsNullOrEmpty(aggregationType) && (!bucketDurationMs.HasValue || bucketDurationMs.Value <= 0))
+            {
+                return Task.FromResult(new TimeSeriesMRangeResult(TimeSeriesResultStatus.InvalidArgument, Array.Empty<TimeSeriesMRangeEntry>()));
+            }
+
+            var candidates = _timeSeries.Keys.ToArray();
+            var entries = new List<TimeSeriesMRangeEntry>();
+            foreach (var key in candidates.OrderBy(x => x, StringComparer.Ordinal))
+            {
+                if (IsExpired(key))
+                {
+                    RemoveKey(key);
+                    continue;
+                }
+
+                if (!_timeSeries.TryGetValue(key, out var samples))
+                {
+                    continue;
+                }
+
+                var labels = _timeSeriesLabels.TryGetValue(key, out var configuredLabels)
+                    ? configuredLabels
+                    : Array.Empty<KeyValuePair<string, string>>();
+
+                if (!MatchesAllFilters(labels, filters))
+                {
+                    continue;
+                }
+
+                var ranged = BuildTimeSeriesRangeSamples(samples, fromTimestamp, toTimestamp, reverse, count, aggregationType, bucketDurationMs);
+                entries.Add(new TimeSeriesMRangeEntry(key, labels, ranged));
+            }
+
+            return Task.FromResult(new TimeSeriesMRangeResult(TimeSeriesResultStatus.Ok, entries.ToArray()));
+        }
+
+        public Task<TimeSeriesDeleteResult> TimeSeriesDeleteAsync(
+            string key,
+            long fromTimestamp,
+            long toTimestamp,
+            CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+                return Task.FromResult(new TimeSeriesDeleteResult(TimeSeriesResultStatus.NotFound, 0));
+            }
+
+            if (HasNonTimeSeriesType(key))
+            {
+                return Task.FromResult(new TimeSeriesDeleteResult(TimeSeriesResultStatus.WrongType, 0));
+            }
+
+            if (!_timeSeries.TryGetValue(key, out var samples) || samples.Count == 0)
+            {
+                return Task.FromResult(new TimeSeriesDeleteResult(TimeSeriesResultStatus.NotFound, 0));
+            }
+
+            var keysToDelete = samples.Keys.Where(ts => ts >= fromTimestamp && ts <= toTimestamp).ToArray();
+            foreach (var ts in keysToDelete)
+            {
+                samples.Remove(ts);
+            }
+
+            if (samples.Count == 0)
+            {
+                _timeSeries.Remove(key);
+                _timeSeriesRetention.Remove(key);
+                _timeSeriesDuplicatePolicy.Remove(key);
+                _timeSeriesLabels.Remove(key);
+                _expirations.Remove(key);
+            }
+
+            return Task.FromResult(new TimeSeriesDeleteResult(TimeSeriesResultStatus.Ok, keysToDelete.LongLength));
+        }
+
+        public Task<TimeSeriesInfoResult> TimeSeriesInfoAsync(string key, CancellationToken token = default)
+        {
+            if (IsExpired(key))
+            {
+                RemoveKey(key);
+                return Task.FromResult(new TimeSeriesInfoResult(TimeSeriesResultStatus.NotFound, 0, null, null, 0, TimeSeriesDuplicatePolicy.Last, Array.Empty<KeyValuePair<string, string>>()));
+            }
+
+            if (HasNonTimeSeriesType(key))
+            {
+                return Task.FromResult(new TimeSeriesInfoResult(TimeSeriesResultStatus.WrongType, 0, null, null, 0, TimeSeriesDuplicatePolicy.Last, Array.Empty<KeyValuePair<string, string>>()));
+            }
+
+            if (!_timeSeries.TryGetValue(key, out var samples))
+            {
+                return Task.FromResult(new TimeSeriesInfoResult(TimeSeriesResultStatus.NotFound, 0, null, null, 0, TimeSeriesDuplicatePolicy.Last, Array.Empty<KeyValuePair<string, string>>()));
+            }
+
+            long? first = samples.Count > 0 ? samples.First().Key : null;
+            long? last = samples.Count > 0 ? samples.Last().Key : null;
+            var retention = _timeSeriesRetention.TryGetValue(key, out var value) ? value : 0;
+            var duplicatePolicy = _timeSeriesDuplicatePolicy.TryGetValue(key, out var configuredPolicy)
+                ? configuredPolicy
+                : TimeSeriesDuplicatePolicy.Last;
+            var labels = _timeSeriesLabels.TryGetValue(key, out var configuredLabels)
+                ? configuredLabels
+                : Array.Empty<KeyValuePair<string, string>>();
+            return Task.FromResult(new TimeSeriesInfoResult(TimeSeriesResultStatus.Ok, samples.Count, first, last, retention, duplicatePolicy, labels));
+        }
+
+        private void ApplyTimeSeriesRetention(string key, SortedDictionary<long, double> samples, long referenceTimestamp)
+        {
+            if (!_timeSeriesRetention.TryGetValue(key, out var retentionMs) || retentionMs <= 0 || samples.Count == 0)
+            {
+                return;
+            }
+
+            var minAllowed = referenceTimestamp - retentionMs;
+            var toRemove = samples.Keys.Where(ts => ts < minAllowed).ToArray();
+            foreach (var ts in toRemove)
+            {
+                samples.Remove(ts);
+            }
+        }
+
+        private static TimeSeriesSample[] BuildTimeSeriesRangeSamples(
+            SortedDictionary<long, double> samples,
+            long fromTimestamp,
+            long toTimestamp,
+            bool reverse,
+            int? count,
+            string? aggregationType,
+            long? bucketDurationMs)
+        {
             IEnumerable<TimeSeriesSample> filtered;
             if (string.IsNullOrEmpty(aggregationType))
             {
@@ -6811,85 +7134,44 @@ namespace Dredis.Tests
                 filtered = filtered.Take(count.Value);
             }
 
-            var result = filtered.ToArray();
-            return Task.FromResult(new TimeSeriesRangeResult(TimeSeriesResultStatus.Ok, result));
+            return filtered.ToArray();
         }
 
-        public Task<TimeSeriesDeleteResult> TimeSeriesDeleteAsync(
-            string key,
-            long fromTimestamp,
-            long toTimestamp,
-            CancellationToken token = default)
+        private static bool MatchesAllFilters(
+            KeyValuePair<string, string>[] labels,
+            KeyValuePair<string, string>[] filters)
         {
-            if (IsExpired(key))
+            if (filters.Length == 0)
             {
-                RemoveKey(key);
-                return Task.FromResult(new TimeSeriesDeleteResult(TimeSeriesResultStatus.NotFound, 0));
+                return true;
             }
 
-            if (HasNonTimeSeriesType(key))
+            var map = labels.ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal);
+            foreach (var filter in filters)
             {
-                return Task.FromResult(new TimeSeriesDeleteResult(TimeSeriesResultStatus.WrongType, 0));
+                if (!map.TryGetValue(filter.Key, out var value) || !string.Equals(value, filter.Value, StringComparison.Ordinal))
+                {
+                    return false;
+                }
             }
 
-            if (!_timeSeries.TryGetValue(key, out var samples) || samples.Count == 0)
-            {
-                return Task.FromResult(new TimeSeriesDeleteResult(TimeSeriesResultStatus.NotFound, 0));
-            }
-
-            var keysToDelete = samples.Keys.Where(ts => ts >= fromTimestamp && ts <= toTimestamp).ToArray();
-            foreach (var ts in keysToDelete)
-            {
-                samples.Remove(ts);
-            }
-
-            if (samples.Count == 0)
-            {
-                _timeSeries.Remove(key);
-                _timeSeriesRetention.Remove(key);
-                _expirations.Remove(key);
-            }
-
-            return Task.FromResult(new TimeSeriesDeleteResult(TimeSeriesResultStatus.Ok, keysToDelete.LongLength));
+            return true;
         }
 
-        public Task<TimeSeriesInfoResult> TimeSeriesInfoAsync(string key, CancellationToken token = default)
+        private static KeyValuePair<string, string>[] NormalizeTimeSeriesLabels(KeyValuePair<string, string>[]? labels)
         {
-            if (IsExpired(key))
+            if (labels == null || labels.Length == 0)
             {
-                RemoveKey(key);
-                return Task.FromResult(new TimeSeriesInfoResult(TimeSeriesResultStatus.NotFound, 0, null, null, 0));
+                return Array.Empty<KeyValuePair<string, string>>();
             }
 
-            if (HasNonTimeSeriesType(key))
+            var map = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var label in labels)
             {
-                return Task.FromResult(new TimeSeriesInfoResult(TimeSeriesResultStatus.WrongType, 0, null, null, 0));
+                map[label.Key] = label.Value;
             }
 
-            if (!_timeSeries.TryGetValue(key, out var samples))
-            {
-                return Task.FromResult(new TimeSeriesInfoResult(TimeSeriesResultStatus.NotFound, 0, null, null, 0));
-            }
-
-            long? first = samples.Count > 0 ? samples.First().Key : null;
-            long? last = samples.Count > 0 ? samples.Last().Key : null;
-            var retention = _timeSeriesRetention.TryGetValue(key, out var value) ? value : 0;
-            return Task.FromResult(new TimeSeriesInfoResult(TimeSeriesResultStatus.Ok, samples.Count, first, last, retention));
-        }
-
-        private void ApplyTimeSeriesRetention(string key, SortedDictionary<long, double> samples, long referenceTimestamp)
-        {
-            if (!_timeSeriesRetention.TryGetValue(key, out var retentionMs) || retentionMs <= 0 || samples.Count == 0)
-            {
-                return;
-            }
-
-            var minAllowed = referenceTimestamp - retentionMs;
-            var toRemove = samples.Keys.Where(ts => ts < minAllowed).ToArray();
-            foreach (var ts in toRemove)
-            {
-                samples.Remove(ts);
-            }
+            return map.Select(x => new KeyValuePair<string, string>(x.Key, x.Value)).ToArray();
         }
 
         /// <summary>
@@ -9041,6 +9323,8 @@ namespace Dredis.Tests
             removed |= _topk.Remove(key);
             removed |= _timeSeries.Remove(key);
             _timeSeriesRetention.Remove(key);
+            _timeSeriesDuplicatePolicy.Remove(key);
+            _timeSeriesLabels.Remove(key);
             _streamLastIds.Remove(key);
             _streamGroups.Remove(key);
             _expirations.Remove(key);

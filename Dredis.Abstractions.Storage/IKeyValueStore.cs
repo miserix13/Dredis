@@ -1377,6 +1377,19 @@ namespace Dredis.Abstractions.Storage
     }
 
     /// <summary>
+    /// Describes duplicate handling policy for time-series writes.
+    /// </summary>
+    public enum TimeSeriesDuplicatePolicy
+    {
+        Last,
+        First,
+        Min,
+        Max,
+        Sum,
+        Block
+    }
+
+    /// <summary>
     /// Represents one time-series sample.
     /// </summary>
     public sealed class TimeSeriesSample
@@ -1514,13 +1527,17 @@ namespace Dredis.Abstractions.Storage
             long totalSamples,
             long? firstTimestamp,
             long? lastTimestamp,
-            long retentionTimeMs)
+            long retentionTimeMs,
+            TimeSeriesDuplicatePolicy duplicatePolicy,
+            KeyValuePair<string, string>[] labels)
         {
             Status = status;
             TotalSamples = totalSamples;
             FirstTimestamp = firstTimestamp;
             LastTimestamp = lastTimestamp;
             RetentionTimeMs = retentionTimeMs;
+            DuplicatePolicy = duplicatePolicy;
+            Labels = labels;
         }
 
         /// <summary>
@@ -1547,6 +1564,75 @@ namespace Dredis.Abstractions.Storage
         /// Gets the configured retention in milliseconds (0 means unlimited).
         /// </summary>
         public long RetentionTimeMs { get; }
+
+        /// <summary>
+        /// Gets the duplicate handling policy.
+        /// </summary>
+        public TimeSeriesDuplicatePolicy DuplicatePolicy { get; }
+
+        /// <summary>
+        /// Gets labels associated with the series.
+        /// </summary>
+        public KeyValuePair<string, string>[] Labels { get; }
+    }
+
+    /// <summary>
+    /// Represents one entry returned by time-series multi-range queries.
+    /// </summary>
+    public sealed class TimeSeriesMRangeEntry
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="TimeSeriesMRangeEntry"/> class.
+        /// </summary>
+        public TimeSeriesMRangeEntry(
+            string key,
+            KeyValuePair<string, string>[] labels,
+            TimeSeriesSample[] samples)
+        {
+            Key = key;
+            Labels = labels;
+            Samples = samples;
+        }
+
+        /// <summary>
+        /// Gets the time-series key.
+        /// </summary>
+        public string Key { get; }
+
+        /// <summary>
+        /// Gets labels associated with the key.
+        /// </summary>
+        public KeyValuePair<string, string>[] Labels { get; }
+
+        /// <summary>
+        /// Gets returned samples for the key.
+        /// </summary>
+        public TimeSeriesSample[] Samples { get; }
+    }
+
+    /// <summary>
+    /// Represents a result for time-series multi-range operations.
+    /// </summary>
+    public sealed class TimeSeriesMRangeResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="TimeSeriesMRangeResult"/> class.
+        /// </summary>
+        public TimeSeriesMRangeResult(TimeSeriesResultStatus status, TimeSeriesMRangeEntry[] entries)
+        {
+            Status = status;
+            Entries = entries;
+        }
+
+        /// <summary>
+        /// Gets the result status.
+        /// </summary>
+        public TimeSeriesResultStatus Status { get; }
+
+        /// <summary>
+        /// Gets the returned series entries.
+        /// </summary>
+        public TimeSeriesMRangeEntry[] Entries { get; }
     }
 
     /// <summary>
@@ -2818,6 +2904,8 @@ namespace Dredis.Abstractions.Storage
         Task<TimeSeriesResultStatus> TimeSeriesCreateAsync(
             string key,
             long? retentionTimeMs,
+            TimeSeriesDuplicatePolicy? duplicatePolicy,
+            KeyValuePair<string, string>[]? labels,
             CancellationToken token = default);
 
         /// <summary>
@@ -2827,6 +2915,7 @@ namespace Dredis.Abstractions.Storage
             string key,
             long timestamp,
             double value,
+            TimeSeriesDuplicatePolicy? onDuplicate,
             bool createIfMissing,
             CancellationToken token = default);
 
@@ -2874,6 +2963,19 @@ namespace Dredis.Abstractions.Storage
         /// </summary>
         Task<TimeSeriesInfoResult> TimeSeriesInfoAsync(
             string key,
+            CancellationToken token = default);
+
+        /// <summary>
+        /// Gets matching ranges across multiple time-series keys filtered by labels.
+        /// </summary>
+        Task<TimeSeriesMRangeResult> TimeSeriesMultiRangeAsync(
+            long fromTimestamp,
+            long toTimestamp,
+            bool reverse,
+            int? count,
+            string? aggregationType,
+            long? bucketDurationMs,
+            KeyValuePair<string, string>[] filters,
             CancellationToken token = default);
     }
 }

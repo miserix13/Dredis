@@ -22,7 +22,7 @@ Currently implemented RESP commands and behavior:
 - Cuckoo filter: `CF.RESERVE`, `CF.ADD`, `CF.ADDNX`, `CF.INSERT`, `CF.INSERTNX`, `CF.EXISTS`, `CF.DEL`, `CF.COUNT`, `CF.INFO`
 - t-digest: `TDIGEST.CREATE`, `TDIGEST.RESET`, `TDIGEST.ADD`, `TDIGEST.QUANTILE`, `TDIGEST.CDF`, `TDIGEST.RANK`, `TDIGEST.REVRANK`, `TDIGEST.BYRANK`, `TDIGEST.BYREVRANK`, `TDIGEST.TRIMMED_MEAN`, `TDIGEST.MIN`, `TDIGEST.MAX`, `TDIGEST.INFO`
 - Top-K: `TOPK.RESERVE`, `TOPK.ADD`, `TOPK.INCRBY`, `TOPK.QUERY`, `TOPK.COUNT`, `TOPK.LIST`, `TOPK.INFO`
-- Time series: `TS.CREATE`, `TS.ADD`, `TS.INCRBY`, `TS.DECRBY`, `TS.GET`, `TS.RANGE`, `TS.REVRANGE`, `TS.DEL`, `TS.INFO`
+- Time series: `TS.CREATE`, `TS.ADD`, `TS.INCRBY`, `TS.DECRBY`, `TS.GET`, `TS.RANGE`, `TS.REVRANGE`, `TS.MRANGE`, `TS.DEL`, `TS.INFO`
 - Pub/Sub: `PUBLISH`, `SUBSCRIBE`, `UNSUBSCRIBE`, `PSUBSCRIBE`, `PUNSUBSCRIBE`
 - Transactions: `MULTI`, `EXEC`, `DISCARD`, `WATCH`, `UNWATCH`
 - JSON: `JSON.SET`, `JSON.GET`, `JSON.DEL`, `JSON.TYPE`, `JSON.STRLEN`, `JSON.ARRLEN`, `JSON.ARRAPPEND`, `JSON.ARRINDEX`, `JSON.ARRINSERT`, `JSON.ARRREM`, `JSON.ARRTRIM`, `JSON.MGET`
@@ -66,8 +66,10 @@ Notes:
 - `VSEARCH` supports paging/options via `LIMIT <n>` and optional `OFFSET <n>` before query vector components.
 - `VSEARCH` is backward-compatible with positional top-k form: `VSEARCH prefix topK metric ...`.
 - `VSEARCH` strict option order: metric form must be `VSEARCH prefix metric LIMIT n [OFFSET n] ...`; positional form supports only optional `OFFSET`.
-- `TS.CREATE` supports optional `RETENTION <milliseconds>`.
+- `TS.CREATE` supports optional `RETENTION <milliseconds>`, `ON_DUPLICATE <LAST|FIRST|MIN|MAX|SUM|BLOCK>`, and `LABELS <name value ...>`.
+- `TS.ADD` supports optional `ON_DUPLICATE <LAST|FIRST|MIN|MAX|SUM|BLOCK>`.
 - `TS.RANGE` and `TS.REVRANGE` support optional `COUNT <n>` and `AGGREGATION <AVG|SUM|MIN|MAX|COUNT> <bucketMs>`.
+- `TS.MRANGE` supports `FILTER <label=value ...>` with optional `COUNT` and `AGGREGATION`.
 
 ## Feature matrix
 
@@ -89,7 +91,7 @@ Notes:
 | Cuckoo filter | Yes | `CF.RESERVE`, `CF.ADD`, `CF.ADDNX`, `CF.INSERT`, `CF.INSERTNX`, `CF.EXISTS`, `CF.DEL`, `CF.COUNT`, `CF.INFO` |
 | t-digest | Yes | `TDIGEST.CREATE`, `TDIGEST.RESET`, `TDIGEST.ADD`, `TDIGEST.QUANTILE`, `TDIGEST.CDF`, `TDIGEST.RANK`, `TDIGEST.REVRANK`, `TDIGEST.BYRANK`, `TDIGEST.BYREVRANK`, `TDIGEST.TRIMMED_MEAN`, `TDIGEST.MIN`, `TDIGEST.MAX`, `TDIGEST.INFO` |
 | Top-K | Yes | `TOPK.RESERVE`, `TOPK.ADD`, `TOPK.INCRBY`, `TOPK.QUERY`, `TOPK.COUNT`, `TOPK.LIST`, `TOPK.INFO` |
-| Time series | Yes | `TS.CREATE`, `TS.ADD`, `TS.INCRBY`, `TS.DECRBY`, `TS.GET`, `TS.RANGE`, `TS.REVRANGE`, `TS.DEL`, `TS.INFO` |
+| Time series | Yes | `TS.CREATE`, `TS.ADD`, `TS.INCRBY`, `TS.DECRBY`, `TS.GET`, `TS.RANGE`, `TS.REVRANGE`, `TS.MRANGE`, `TS.DEL`, `TS.INFO` |
 | Consumer groups | Yes | `XGROUP CREATE/DESTROY/SETID/DELCONSUMER`, `XREADGROUP`, `XACK`, `XPENDING`, `XCLAIM` |
 | Pub/Sub | Yes | `PUBLISH`, `SUBSCRIBE`, `UNSUBSCRIBE`, `PSUBSCRIBE`, `PUNSUBSCRIBE` |
 | Transactions | Yes | `MULTI`, `EXEC`, `DISCARD`, `WATCH`, `UNWATCH` with optimistic locking |

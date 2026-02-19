@@ -1146,6 +1146,10 @@ namespace Dredis
                     await HandleTimeSeriesRangeAsync(ctx, elements, reverse: false);
                     break;
 
+                case "TS.MRANGE":
+                    await HandleTimeSeriesMultiRangeAsync(ctx, elements, reverse: false);
+                    break;
+
                 case "TS.REVRANGE":
                     await HandleTimeSeriesRangeAsync(ctx, elements, reverse: true);
                     break;
@@ -4850,7 +4854,7 @@ namespace Dredis
 
         private async Task HandleTimeSeriesCreateAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
         {
-            if (args.Count != 2 && args.Count != 4)
+            if (args.Count < 2)
             {
                 WriteError(ctx, "ERR wrong number of arguments for 'ts.create' command");
                 return;
@@ -4863,22 +4867,82 @@ namespace Dredis
             }
 
             long? retentionTimeMs = null;
-            if (args.Count == 4)
+            TimeSeriesDuplicatePolicy? duplicatePolicy = null;
+            KeyValuePair<string, string>[]? labels = null;
+
+            int index = 2;
+            while (index < args.Count)
             {
-                if (!TryGetString(args[2], out var retentionKeyword) ||
-                    !retentionKeyword.Equals("RETENTION", StringComparison.OrdinalIgnoreCase) ||
-                    !TryGetString(args[3], out var retentionText) ||
-                    !long.TryParse(retentionText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedRetention) ||
-                    parsedRetention < 0)
+                if (!TryGetString(args[index], out var option))
                 {
                     WriteError(ctx, "ERR invalid arguments");
                     return;
                 }
 
-                retentionTimeMs = parsedRetention;
+                if (option.Equals("RETENTION", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (retentionTimeMs.HasValue || index + 1 >= args.Count ||
+                        !TryGetString(args[index + 1], out var retentionText) ||
+                        !long.TryParse(retentionText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedRetention) ||
+                        parsedRetention < 0)
+                    {
+                        WriteError(ctx, "ERR invalid arguments");
+                        return;
+                    }
+
+                    retentionTimeMs = parsedRetention;
+                    index += 2;
+                    continue;
+                }
+
+                if (option.Equals("ON_DUPLICATE", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (duplicatePolicy.HasValue || index + 1 >= args.Count ||
+                        !TryGetString(args[index + 1], out var policyText) ||
+                        !TryParseTimeSeriesDuplicatePolicy(policyText, out var parsedPolicy))
+                    {
+                        WriteError(ctx, "ERR invalid arguments");
+                        return;
+                    }
+
+                    duplicatePolicy = parsedPolicy;
+                    index += 2;
+                    continue;
+                }
+
+                if (option.Equals("LABELS", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (labels != null || index + 1 >= args.Count)
+                    {
+                        WriteError(ctx, "ERR invalid arguments");
+                        return;
+                    }
+
+                    var parsedLabels = new List<KeyValuePair<string, string>>();
+                    index += 1;
+                    while (index < args.Count)
+                    {
+                        if (index + 1 >= args.Count ||
+                            !TryGetString(args[index], out var labelKey) ||
+                            !TryGetString(args[index + 1], out var labelValue))
+                        {
+                            WriteError(ctx, "ERR invalid arguments");
+                            return;
+                        }
+
+                        parsedLabels.Add(new KeyValuePair<string, string>(labelKey, labelValue));
+                        index += 2;
+                    }
+
+                    labels = parsedLabels.ToArray();
+                    break;
+                }
+
+                WriteError(ctx, "ERR syntax error");
+                return;
             }
 
-            var result = await _store.TimeSeriesCreateAsync(key, retentionTimeMs).ConfigureAwait(false);
+            var result = await _store.TimeSeriesCreateAsync(key, retentionTimeMs, duplicatePolicy, labels).ConfigureAwait(false);
             if (result == TimeSeriesResultStatus.WrongType)
             {
                 WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
@@ -4897,7 +4961,7 @@ namespace Dredis
 
         private async Task HandleTimeSeriesAddAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
         {
-            if (args.Count != 4)
+            if (args.Count < 4)
             {
                 WriteError(ctx, "ERR wrong number of arguments for 'ts.add' command");
                 return;
@@ -4925,10 +4989,45 @@ namespace Dredis
                 return;
             }
 
-            var result = await _store.TimeSeriesAddAsync(key, timestamp, value, createIfMissing: true).ConfigureAwait(false);
+            TimeSeriesDuplicatePolicy? onDuplicate = null;
+            int index = 4;
+            while (index < args.Count)
+            {
+                if (!TryGetString(args[index], out var option))
+                {
+                    WriteError(ctx, "ERR invalid arguments");
+                    return;
+                }
+
+                if (option.Equals("ON_DUPLICATE", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (onDuplicate.HasValue || index + 1 >= args.Count ||
+                        !TryGetString(args[index + 1], out var policyText) ||
+                        !TryParseTimeSeriesDuplicatePolicy(policyText, out var parsedPolicy))
+                    {
+                        WriteError(ctx, "ERR invalid arguments");
+                        return;
+                    }
+
+                    onDuplicate = parsedPolicy;
+                    index += 2;
+                    continue;
+                }
+
+                WriteError(ctx, "ERR syntax error");
+                return;
+            }
+
+            var result = await _store.TimeSeriesAddAsync(key, timestamp, value, onDuplicate, createIfMissing: true).ConfigureAwait(false);
             if (result.Status == TimeSeriesResultStatus.WrongType)
             {
                 WriteError(ctx, "WRONGTYPE Operation against a key holding the wrong kind of value");
+                return;
+            }
+
+            if (result.Status == TimeSeriesResultStatus.Exists)
+            {
+                WriteError(ctx, "ERR TSDB: Error at upsert, update is not supported when DUPLICATE_POLICY is set to BLOCK mode");
                 return;
             }
 
@@ -5159,6 +5258,171 @@ namespace Dredis
             WriteArray(ctx, children);
         }
 
+        private async Task HandleTimeSeriesMultiRangeAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args, bool reverse)
+        {
+            var commandName = reverse ? "ts.mrevrange" : "ts.mrange";
+            if (args.Count < 6)
+            {
+                WriteError(ctx, $"ERR wrong number of arguments for '{commandName}' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var fromText) ||
+                !TryGetString(args[2], out var toText) ||
+                !TryParseTimeSeriesRangeBoundary(fromText, startBoundary: true, out var fromTimestamp) ||
+                !TryParseTimeSeriesRangeBoundary(toText, startBoundary: false, out var toTimestamp))
+            {
+                WriteError(ctx, "ERR invalid arguments");
+                return;
+            }
+
+            int? count = null;
+            string? aggregationType = null;
+            long? bucketDurationMs = null;
+            int index = 3;
+            while (index < args.Count)
+            {
+                if (!TryGetString(args[index], out var token))
+                {
+                    WriteError(ctx, "ERR invalid arguments");
+                    return;
+                }
+
+                if (token.Equals("FILTER", StringComparison.OrdinalIgnoreCase))
+                {
+                    break;
+                }
+
+                if (token.Equals("COUNT", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (count.HasValue || index + 1 >= args.Count ||
+                        !TryGetString(args[index + 1], out var countText) ||
+                        !int.TryParse(countText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedCount) ||
+                        parsedCount < 0)
+                    {
+                        WriteError(ctx, "ERR invalid arguments");
+                        return;
+                    }
+
+                    count = parsedCount;
+                    index += 2;
+                    continue;
+                }
+
+                if (token.Equals("AGGREGATION", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (aggregationType != null || index + 2 >= args.Count ||
+                        !TryGetString(args[index + 1], out var parsedAggregationType) ||
+                        !TryGetString(args[index + 2], out var bucketText) ||
+                        !long.TryParse(bucketText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedBucket) ||
+                        parsedBucket <= 0)
+                    {
+                        WriteError(ctx, "ERR invalid arguments");
+                        return;
+                    }
+
+                    var normalizedAggregation = parsedAggregationType.ToUpperInvariant();
+                    if (normalizedAggregation != "AVG" &&
+                        normalizedAggregation != "SUM" &&
+                        normalizedAggregation != "MIN" &&
+                        normalizedAggregation != "MAX" &&
+                        normalizedAggregation != "COUNT")
+                    {
+                        WriteError(ctx, "ERR invalid arguments");
+                        return;
+                    }
+
+                    aggregationType = normalizedAggregation;
+                    bucketDurationMs = parsedBucket;
+                    index += 3;
+                    continue;
+                }
+
+                WriteError(ctx, "ERR syntax error");
+                return;
+            }
+
+            if (index >= args.Count || !TryGetString(args[index], out var filterToken) || !filterToken.Equals("FILTER", StringComparison.OrdinalIgnoreCase))
+            {
+                WriteError(ctx, "ERR invalid arguments");
+                return;
+            }
+
+            index += 1;
+            if (index >= args.Count)
+            {
+                WriteError(ctx, "ERR invalid arguments");
+                return;
+            }
+
+            var filters = new List<KeyValuePair<string, string>>();
+            while (index < args.Count)
+            {
+                if (!TryGetString(args[index], out var filterText))
+                {
+                    WriteError(ctx, "ERR invalid arguments");
+                    return;
+                }
+
+                var separator = filterText.IndexOf('=');
+                if (separator <= 0 || separator >= filterText.Length - 1)
+                {
+                    WriteError(ctx, "ERR invalid arguments");
+                    return;
+                }
+
+                var label = filterText.Substring(0, separator);
+                var value = filterText.Substring(separator + 1);
+                filters.Add(new KeyValuePair<string, string>(label, value));
+                index += 1;
+            }
+
+            var result = await _store.TimeSeriesMultiRangeAsync(
+                fromTimestamp,
+                toTimestamp,
+                reverse,
+                count,
+                aggregationType,
+                bucketDurationMs,
+                filters.ToArray()).ConfigureAwait(false);
+            if (result.Status == TimeSeriesResultStatus.InvalidArgument)
+            {
+                WriteError(ctx, "ERR invalid arguments");
+                return;
+            }
+
+            var entries = new IRedisMessage[result.Entries.Length];
+            for (int i = 0; i < result.Entries.Length; i++)
+            {
+                var entry = result.Entries[i];
+                var labels = new List<IRedisMessage>();
+                foreach (var label in entry.Labels)
+                {
+                    labels.Add(new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(label.Key))));
+                    labels.Add(new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(label.Value))));
+                }
+
+                var samples = new IRedisMessage[entry.Samples.Length];
+                for (int s = 0; s < entry.Samples.Length; s++)
+                {
+                    samples[s] = new ArrayRedisMessage(new IRedisMessage[]
+                    {
+                        new IntegerRedisMessage(entry.Samples[s].Timestamp),
+                        new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(entry.Samples[s].Value.ToString("G17", CultureInfo.InvariantCulture))))
+                    });
+                }
+
+                entries[i] = new ArrayRedisMessage(new IRedisMessage[]
+                {
+                    new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(entry.Key))),
+                    new ArrayRedisMessage(labels.ToArray()),
+                    new ArrayRedisMessage(samples)
+                });
+            }
+
+            WriteArray(ctx, entries);
+        }
+
         private async Task HandleTimeSeriesDeleteAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args)
         {
             if (args.Count != 4)
@@ -5230,13 +5494,53 @@ namespace Dredis
                 new IntegerRedisMessage(result.TotalSamples),
                 new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes("retentionTime"))),
                 new IntegerRedisMessage(result.RetentionTimeMs),
+                new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes("duplicatePolicy"))),
+                new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(result.DuplicatePolicy.ToString().ToUpperInvariant()))),
                 new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes("firstTimestamp"))),
                 result.FirstTimestamp.HasValue ? new IntegerRedisMessage(result.FirstTimestamp.Value) : FullBulkStringRedisMessage.Null,
                 new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes("lastTimestamp"))),
                 result.LastTimestamp.HasValue ? new IntegerRedisMessage(result.LastTimestamp.Value) : FullBulkStringRedisMessage.Null
             };
 
+            fields.Add(new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes("labels"))));
+            var labelsArray = new List<IRedisMessage>();
+            foreach (var label in result.Labels)
+            {
+                labelsArray.Add(new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(label.Key))));
+                labelsArray.Add(new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(label.Value))));
+            }
+
+            fields.Add(new ArrayRedisMessage(labelsArray.ToArray()));
+
             WriteArray(ctx, fields);
+        }
+
+        private static bool TryParseTimeSeriesDuplicatePolicy(string token, out TimeSeriesDuplicatePolicy policy)
+        {
+            switch (token.ToUpperInvariant())
+            {
+                case "LAST":
+                    policy = TimeSeriesDuplicatePolicy.Last;
+                    return true;
+                case "FIRST":
+                    policy = TimeSeriesDuplicatePolicy.First;
+                    return true;
+                case "MIN":
+                    policy = TimeSeriesDuplicatePolicy.Min;
+                    return true;
+                case "MAX":
+                    policy = TimeSeriesDuplicatePolicy.Max;
+                    return true;
+                case "SUM":
+                    policy = TimeSeriesDuplicatePolicy.Sum;
+                    return true;
+                case "BLOCK":
+                    policy = TimeSeriesDuplicatePolicy.Block;
+                    return true;
+                default:
+                    policy = TimeSeriesDuplicatePolicy.Last;
+                    return false;
+            }
         }
 
         private static bool TryParseTimeSeriesRangeBoundary(string token, bool startBoundary, out long timestamp)
