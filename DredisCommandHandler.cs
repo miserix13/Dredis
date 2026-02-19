@@ -629,10 +629,41 @@ namespace Dredis
             {
                 _ = HandleCommandAsync(ctx, array);
             }
+            else if (msg is InlineCommandRedisMessage inline)
+            {
+                var inlineArray = ParseInlineCommand(inline.Content);
+                if (inlineArray.Children.Count == 0)
+                {
+                    WriteError(ctx, "ERR empty command");
+                    return;
+                }
+
+                _ = HandleCommandAsync(ctx, inlineArray);
+            }
             else
             {
                 WriteError(ctx, "ERR protocol error: expected array");
             }
+        }
+
+        /// <summary>
+        /// Parses an inline Redis command into an array message.
+        /// </summary>
+        private static IArrayRedisMessage ParseInlineCommand(string content)
+        {
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                return new ArrayRedisMessage(Array.Empty<IRedisMessage>());
+            }
+
+            var parts = content.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            var children = new IRedisMessage[parts.Length];
+            for (var i = 0; i < parts.Length; i++)
+            {
+                children[i] = new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(Utf8.GetBytes(parts[i])));
+            }
+
+            return new ArrayRedisMessage(children);
         }
 
         /// <summary>
