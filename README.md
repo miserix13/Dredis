@@ -80,6 +80,15 @@ Notes:
 | JSON | Yes | `JSON.SET`, `JSON.GET`, `JSON.DEL`, `JSON.TYPE`, `JSON.STRLEN`, `JSON.ARRLEN`, `JSON.ARRAPPEND`, `JSON.ARRINDEX`, `JSON.ARRINSERT`, `JSON.ARRREM`, `JSON.ARRTRIM`, `JSON.MGET` |
 | Vectors | Yes | `VSET`, `VGET`, `VDIM`, `VDEL`, `VSIM`, `VSEARCH` |
 
+## Client compatibility
+
+Dredis includes handshake compatibility for common .NET Redis clients, including `StackExchange.Redis` and NRedis-family clients (`NRedisStack`).
+
+- Handshake/probe commands supported: `CLIENT` (`SETNAME`, `SETINFO`, `ID`, `GETNAME`), `COMMAND`, `CONFIG GET`, `INFO`, `SELECT`, `READONLY`, `READWRITE`.
+- Inline command parsing is supported in addition to array-style RESP command frames.
+- Missing tie-break key (`__Booksleeve_TieBreak`) is handled with a valid bulk-string response shape expected by StackExchange.Redis.
+- End-to-end compatibility is validated by `Dredis.Tests/DredisNRedisCompatibilityTests.cs`.
+
 ## Architecture
 
 Dredis is built on a modular architecture with the following components:
