@@ -10,6 +10,7 @@ Currently implemented RESP commands and behavior:
 - Strings: `GET`, `SET` (supports `EX`, `PX`, `NX`, `XX`), `MGET`, `MSET`
 - Keys: `DEL`, `EXISTS`
 - Counters: `INCR`, `INCRBY`, `DECR`, `DECRBY`
+- Bitmaps: `GETBIT`, `SETBIT`, `BITCOUNT`, `BITFIELD` (`GET`, `SET`, `INCRBY`, `OVERFLOW`)
 - Expiration: `EXPIRE`, `PEXPIRE`, `TTL`, `PTTL`
 - Hashes: `HSET`, `HGET`, `HDEL`, `HGETALL`
 - Lists: `LPUSH`, `RPUSH`, `LPOP`, `RPOP`, `LRANGE`, `LLEN`, `LINDEX`, `LSET`, `LTRIM`
@@ -68,6 +69,7 @@ Notes:
 | Strings | Yes | `GET`, `SET`, `MGET`, `MSET` |
 | Keys | Yes | `DEL`, `EXISTS` |
 | Counters | Yes | `INCR`, `INCRBY`, `DECR`, `DECRBY` |
+| Bitmaps | Yes | `GETBIT`, `SETBIT`, `BITCOUNT`, `BITFIELD` (`GET`, `SET`, `INCRBY`, `OVERFLOW`) |
 | Expiration | Yes | `EXPIRE`, `PEXPIRE`, `TTL`, `PTTL` |
 | Hashes | Yes | `HSET`, `HGET`, `HDEL`, `HGETALL` |
 | Lists | Yes | `LPUSH`, `RPUSH`, `LPOP`, `RPOP`, `LRANGE`, `LLEN`, `LINDEX`, `LSET`, `LTRIM` |

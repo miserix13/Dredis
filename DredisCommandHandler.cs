@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Globalization;
 using System.Net;
+using System.Numerics;
 using System.Text;
 using DotNetty.Buffers;
 using DotNetty.Codecs.Redis.Messages;
@@ -596,6 +597,7 @@ namespace Dredis
     {
         private readonly IKeyValueStore _store;
         private static readonly Encoding Utf8 = new UTF8Encoding(false);
+        private const long MaxBitOffset = ((long)int.MaxValue * 8) - 1;
         private static readonly PubSubManager PubSub = new PubSubManager();
         private static readonly TransactionManager Transactions = new TransactionManager();
 
@@ -757,6 +759,22 @@ namespace Dredis
 
                 case "SET":
                     await HandleSetAsync(ctx, elements);
+                    break;
+
+                case "GETBIT":
+                    await HandleGetBitAsync(ctx, elements);
+                    break;
+
+                case "SETBIT":
+                    await HandleSetBitAsync(ctx, elements);
+                    break;
+
+                case "BITCOUNT":
+                    await HandleBitCountAsync(ctx, elements);
+                    break;
+
+                case "BITFIELD":
+                    await HandleBitFieldAsync(ctx, elements);
                     break;
 
                 case "MGET":
@@ -1460,6 +1478,349 @@ namespace Dredis
             }
 
             WriteNullBulkString(ctx);
+        }
+
+        /// <summary>
+        /// Handles the GETBIT command.
+        /// </summary>
+        private async Task HandleGetBitAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'getbit' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key) || !TryGetString(args[2], out var bitOffsetText))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            if (!TryParseBitOffset(bitOffsetText, out var bitOffset))
+            {
+                WriteError(ctx, "ERR bit offset is not an integer or out of range");
+                return;
+            }
+
+            var value = await _store.GetAsync(key).ConfigureAwait(false);
+            var bit = GetBitmapBit(value, bitOffset);
+            WriteInteger(ctx, bit);
+        }
+
+        /// <summary>
+        /// Handles the SETBIT command.
+        /// </summary>
+        private async Task HandleSetBitAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 4)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'setbit' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key) ||
+                !TryGetString(args[2], out var bitOffsetText) ||
+                !TryGetString(args[3], out var bitValueText))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            if (!TryParseBitOffset(bitOffsetText, out var bitOffset))
+            {
+                WriteError(ctx, "ERR bit offset is not an integer or out of range");
+                return;
+            }
+
+            if (!int.TryParse(bitValueText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var bitValue) || (bitValue != 0 && bitValue != 1))
+            {
+                WriteError(ctx, "ERR bit is not an integer or out of range");
+                return;
+            }
+
+            var current = await _store.GetAsync(key).ConfigureAwait(false);
+            var updated = current == null ? Array.Empty<byte>() : (byte[])current.Clone();
+            var previousBit = SetBitmapBit(ref updated, bitOffset, bitValue);
+
+            await SetStringValuePreservingTtlAsync(key, updated).ConfigureAwait(false);
+            Transactions.NotifyKeyModified(key, _store);
+            WriteInteger(ctx, previousBit);
+        }
+
+        /// <summary>
+        /// Handles the BITCOUNT command.
+        /// </summary>
+        private async Task HandleBitCountAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 2 && args.Count != 4)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'bitcount' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var value = await _store.GetAsync(key).ConfigureAwait(false);
+            if (value == null || value.Length == 0)
+            {
+                WriteInteger(ctx, 0);
+                return;
+            }
+
+            var startByte = 0;
+            var endByte = value.Length - 1;
+
+            if (args.Count == 4)
+            {
+                if (!TryGetString(args[2], out var startText) || !TryGetString(args[3], out var endText))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                if (!long.TryParse(startText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var start) ||
+                    !long.TryParse(endText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var end))
+                {
+                    WriteError(ctx, "ERR value is not an integer or out of range");
+                    return;
+                }
+
+                var byteLength = value.LongLength;
+                if (start < 0)
+                {
+                    start += byteLength;
+                }
+
+                if (end < 0)
+                {
+                    end += byteLength;
+                }
+
+                if (start < 0)
+                {
+                    start = 0;
+                }
+
+                if (end >= byteLength)
+                {
+                    end = byteLength - 1;
+                }
+
+                if (start > end || start >= byteLength || end < 0)
+                {
+                    WriteInteger(ctx, 0);
+                    return;
+                }
+
+                startByte = (int)start;
+                endByte = (int)end;
+            }
+
+            long bitCount = 0;
+            for (int i = startByte; i <= endByte; i++)
+            {
+                bitCount += BitOperations.PopCount((uint)value[i]);
+            }
+
+            WriteInteger(ctx, bitCount);
+        }
+
+        /// <summary>
+        /// Handles the BITFIELD command with GET, SET, INCRBY, and OVERFLOW operations.
+        /// </summary>
+        private async Task HandleBitFieldAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count < 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'bitfield' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var current = await _store.GetAsync(key).ConfigureAwait(false);
+            var updated = current == null ? Array.Empty<byte>() : (byte[])current.Clone();
+
+            var replies = new List<IRedisMessage>();
+            var overflowMode = "WRAP";
+            var changed = false;
+
+            for (int i = 2; i < args.Count;)
+            {
+                if (!TryGetString(args[i], out var operation))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return;
+                }
+
+                switch (operation.ToUpperInvariant())
+                {
+                    case "OVERFLOW":
+                        if (i + 1 >= args.Count || !TryGetString(args[i + 1], out var mode))
+                        {
+                            WriteError(ctx, "ERR syntax error");
+                            return;
+                        }
+
+                        mode = mode.ToUpperInvariant();
+                        if (mode != "WRAP" && mode != "SAT" && mode != "FAIL")
+                        {
+                            WriteError(ctx, "ERR syntax error");
+                            return;
+                        }
+
+                        overflowMode = mode;
+                        i += 2;
+                        break;
+
+                    case "GET":
+                        if (i + 2 >= args.Count ||
+                            !TryGetString(args[i + 1], out var getTypeText) ||
+                            !TryGetString(args[i + 2], out var getOffsetText))
+                        {
+                            WriteError(ctx, "ERR syntax error");
+                            return;
+                        }
+
+                        if (!TryParseBitFieldType(getTypeText, out var getSigned, out var getBits, out _, out _, out _)
+                            || !TryParseBitFieldOffset(getOffsetText, getBits, out var getBitOffset))
+                        {
+                            WriteError(ctx, "ERR bitfield type or offset is invalid");
+                            return;
+                        }
+
+                        var getRaw = ReadBitsUnsigned(updated, getBitOffset, getBits);
+                        var getValue = ConvertRawToBitFieldValue(getRaw, getSigned, getBits);
+                        replies.Add(new IntegerRedisMessage(getValue));
+                        i += 3;
+                        break;
+
+                    case "SET":
+                        if (i + 3 >= args.Count ||
+                            !TryGetString(args[i + 1], out var setTypeText) ||
+                            !TryGetString(args[i + 2], out var setOffsetText) ||
+                            !TryGetString(args[i + 3], out var setValueText))
+                        {
+                            WriteError(ctx, "ERR syntax error");
+                            return;
+                        }
+
+                        if (!TryParseBitFieldType(setTypeText, out var setSigned, out var setBits, out var setMask, out _, out _)
+                            || !TryParseBitFieldOffset(setOffsetText, setBits, out var setBitOffset)
+                            || !long.TryParse(setValueText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var setInputValue))
+                        {
+                            WriteError(ctx, "ERR value is not an integer or out of range");
+                            return;
+                        }
+
+                        var setOldRaw = ReadBitsUnsigned(updated, setBitOffset, setBits);
+                        var setOldValue = ConvertRawToBitFieldValue(setOldRaw, setSigned, setBits);
+                        var setRaw = ConvertBitFieldValueToRaw(new BigInteger(setInputValue), setMask, setSigned, setBits);
+                        WriteBitsUnsigned(ref updated, setBitOffset, setBits, setRaw);
+                        changed = true;
+                        replies.Add(new IntegerRedisMessage(setOldValue));
+                        i += 4;
+                        break;
+
+                    case "INCRBY":
+                        if (i + 3 >= args.Count ||
+                            !TryGetString(args[i + 1], out var incrTypeText) ||
+                            !TryGetString(args[i + 2], out var incrOffsetText) ||
+                            !TryGetString(args[i + 3], out var incrementText))
+                        {
+                            WriteError(ctx, "ERR syntax error");
+                            return;
+                        }
+
+                        if (!TryParseBitFieldType(incrTypeText, out var incrSigned, out var incrBits, out var incrMask, out var incrMin, out var incrMax)
+                            || !TryParseBitFieldOffset(incrOffsetText, incrBits, out var incrBitOffset)
+                            || !long.TryParse(incrementText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var increment))
+                        {
+                            WriteError(ctx, "ERR value is not an integer or out of range");
+                            return;
+                        }
+
+                        var incrOldRaw = ReadBitsUnsigned(updated, incrBitOffset, incrBits);
+                        var incrOldValue = ConvertRawToBitFieldValue(incrOldRaw, incrSigned, incrBits);
+                        var incremented = new BigInteger(incrOldValue) + increment;
+
+                        BigInteger resolved;
+                        if (incremented < incrMin || incremented > incrMax)
+                        {
+                            switch (overflowMode)
+                            {
+                                case "SAT":
+                                    resolved = incremented < incrMin ? incrMin : incrMax;
+                                    break;
+
+                                case "FAIL":
+                                    replies.Add(FullBulkStringRedisMessage.Null);
+                                    i += 4;
+                                    continue;
+
+                                default:
+                                    var span = (incrMax - incrMin) + 1;
+                                    resolved = ((incremented - incrMin) % span + span) % span + incrMin;
+                                    break;
+                            }
+                        }
+                        else
+                        {
+                            resolved = incremented;
+                        }
+
+                        var incrRaw = ConvertBitFieldValueToRaw(resolved, incrMask, incrSigned, incrBits);
+                        WriteBitsUnsigned(ref updated, incrBitOffset, incrBits, incrRaw);
+                        changed = true;
+                        replies.Add(new IntegerRedisMessage((long)resolved));
+                        i += 4;
+                        break;
+
+                    default:
+                        WriteError(ctx, "ERR syntax error");
+                        return;
+                }
+            }
+
+            if (changed)
+            {
+                await SetStringValuePreservingTtlAsync(key, updated).ConfigureAwait(false);
+                Transactions.NotifyKeyModified(key, _store);
+            }
+
+            WriteArray(ctx, replies);
+        }
+
+        /// <summary>
+        /// Stores a string value while preserving the existing TTL (if present).
+        /// </summary>
+        private async Task SetStringValuePreservingTtlAsync(string key, byte[] value)
+        {
+            TimeSpan? expiration = null;
+            var pttl = await _store.PttlAsync(key).ConfigureAwait(false);
+            if (pttl > 0)
+            {
+                expiration = TimeSpan.FromMilliseconds(pttl);
+            }
+
+            await _store.SetAsync(key, value, expiration, SetCondition.None).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -5279,6 +5640,250 @@ namespace Dredis
                     value = Array.Empty<byte>();
                     return false;
             }
+        }
+
+        /// <summary>
+        /// Tries to parse a non-negative bit offset.
+        /// </summary>
+        private static bool TryParseBitOffset(string text, out long offset)
+        {
+            return long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out offset)
+                && offset >= 0
+                && offset <= MaxBitOffset;
+        }
+
+        /// <summary>
+        /// Gets the bit at a specific offset from a bitmap byte array.
+        /// </summary>
+        private static int GetBitmapBit(byte[]? value, long bitOffset)
+        {
+            if (value == null || value.Length == 0)
+            {
+                return 0;
+            }
+
+            var byteIndex = (int)(bitOffset / 8);
+            if (byteIndex < 0 || byteIndex >= value.Length)
+            {
+                return 0;
+            }
+
+            var bitIndex = 7 - (int)(bitOffset % 8);
+            return (value[byteIndex] >> bitIndex) & 1;
+        }
+
+        /// <summary>
+        /// Sets the bit at a specific offset and returns the previous bit value.
+        /// </summary>
+        private static int SetBitmapBit(ref byte[] value, long bitOffset, int bit)
+        {
+            var byteIndex = (int)(bitOffset / 8);
+            var bitIndex = 7 - (int)(bitOffset % 8);
+
+            if (byteIndex >= value.Length)
+            {
+                var expanded = new byte[byteIndex + 1];
+                if (value.Length > 0)
+                {
+                    Buffer.BlockCopy(value, 0, expanded, 0, value.Length);
+                }
+
+                value = expanded;
+            }
+
+            var previous = (value[byteIndex] >> bitIndex) & 1;
+            if (bit == 1)
+            {
+                value[byteIndex] = (byte)(value[byteIndex] | (1 << bitIndex));
+            }
+            else
+            {
+                value[byteIndex] = (byte)(value[byteIndex] & ~(1 << bitIndex));
+            }
+
+            return previous;
+        }
+
+        /// <summary>
+        /// Tries to parse a bitfield type specification like i8 or u16.
+        /// </summary>
+        private static bool TryParseBitFieldType(
+            string text,
+            out bool signed,
+            out int bits,
+            out ulong mask,
+            out BigInteger min,
+            out BigInteger max)
+        {
+            signed = false;
+            bits = 0;
+            mask = 0;
+            min = BigInteger.Zero;
+            max = BigInteger.Zero;
+
+            if (string.IsNullOrWhiteSpace(text) || text.Length < 2)
+            {
+                return false;
+            }
+
+            var prefix = char.ToUpperInvariant(text[0]);
+            if (prefix != 'I' && prefix != 'U')
+            {
+                return false;
+            }
+
+            if (!int.TryParse(text[1..], NumberStyles.Integer, CultureInfo.InvariantCulture, out bits) || bits <= 0)
+            {
+                return false;
+            }
+
+            signed = prefix == 'I';
+            if (signed)
+            {
+                if (bits > 64)
+                {
+                    return false;
+                }
+
+                max = bits == 64
+                    ? new BigInteger(long.MaxValue)
+                    : (BigInteger.One << (bits - 1)) - 1;
+                min = bits == 64
+                    ? new BigInteger(long.MinValue)
+                    : -(BigInteger.One << (bits - 1));
+            }
+            else
+            {
+                if (bits > 63)
+                {
+                    return false;
+                }
+
+                max = (BigInteger.One << bits) - 1;
+                min = BigInteger.Zero;
+            }
+
+            mask = bits == 64 ? ulong.MaxValue : ((1UL << bits) - 1);
+            return true;
+        }
+
+        /// <summary>
+        /// Tries to parse a bitfield offset, supporting both absolute and #multiplied forms.
+        /// </summary>
+        private static bool TryParseBitFieldOffset(string text, int bits, out long bitOffset)
+        {
+            bitOffset = 0;
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return false;
+            }
+
+            long parsed;
+            if (text[0] == '#')
+            {
+                if (!long.TryParse(text[1..], NumberStyles.Integer, CultureInfo.InvariantCulture, out var index) || index < 0)
+                {
+                    return false;
+                }
+
+                try
+                {
+                    parsed = checked(index * bits);
+                }
+                catch (OverflowException)
+                {
+                    return false;
+                }
+            }
+            else
+            {
+                if (!long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out parsed))
+                {
+                    return false;
+                }
+            }
+
+            if (parsed < 0 || parsed > MaxBitOffset)
+            {
+                return false;
+            }
+
+            if (parsed + bits - 1 > MaxBitOffset)
+            {
+                return false;
+            }
+
+            bitOffset = parsed;
+            return true;
+        }
+
+        /// <summary>
+        /// Reads an unsigned integer value from a bitmap bit range.
+        /// </summary>
+        private static ulong ReadBitsUnsigned(byte[] value, long bitOffset, int bits)
+        {
+            ulong raw = 0;
+            for (int i = 0; i < bits; i++)
+            {
+                raw = (raw << 1) | (uint)GetBitmapBit(value, bitOffset + i);
+            }
+
+            return raw;
+        }
+
+        /// <summary>
+        /// Writes an unsigned integer value to a bitmap bit range.
+        /// </summary>
+        private static void WriteBitsUnsigned(ref byte[] value, long bitOffset, int bits, ulong raw)
+        {
+            for (int i = 0; i < bits; i++)
+            {
+                var bit = (int)((raw >> (bits - 1 - i)) & 1UL);
+                _ = SetBitmapBit(ref value, bitOffset + i, bit);
+            }
+        }
+
+        /// <summary>
+        /// Converts an unsigned raw bitfield value into its command integer representation.
+        /// </summary>
+        private static long ConvertRawToBitFieldValue(ulong raw, bool signed, int bits)
+        {
+            if (!signed)
+            {
+                return (long)raw;
+            }
+
+            if (bits == 64)
+            {
+                return unchecked((long)raw);
+            }
+
+            var signBit = 1UL << (bits - 1);
+            if ((raw & signBit) == 0)
+            {
+                return (long)raw;
+            }
+
+            var modulus = 1UL << bits;
+            return (long)(raw - modulus);
+        }
+
+        /// <summary>
+        /// Converts a command integer into the corresponding unsigned raw bitfield value.
+        /// </summary>
+        private static ulong ConvertBitFieldValueToRaw(BigInteger value, ulong mask, bool signed, int bits)
+        {
+            if (signed)
+            {
+                var modulo = bits == 64 ? (BigInteger.One << 64) : (BigInteger.One << bits);
+                if (value < 0)
+                {
+                    value += modulo;
+                }
+            }
+
+            var raw = (ulong)value;
+            return raw & mask;
         }
 
         /// <summary>

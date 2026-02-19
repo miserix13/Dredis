@@ -334,6 +334,146 @@ namespace Dredis.Tests
 
         [Fact]
         /// <summary>
+        /// Verifies SETBIT/GETBIT round-trip with automatic bitmap expansion.
+        /// </summary>
+        public async Task SetBit_GetBit_RoundTrip()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("SETBIT", "bits", "9", "1"));
+                channel.RunPendingTasks();
+
+                var setResponse = ReadOutbound(channel);
+                var setPrevious = Assert.IsType<IntegerRedisMessage>(setResponse);
+                Assert.Equal(0, setPrevious.Value);
+
+                channel.WriteInbound(Command("GETBIT", "bits", "9"));
+                channel.RunPendingTasks();
+
+                var getSetBitResponse = ReadOutbound(channel);
+                var getSetBit = Assert.IsType<IntegerRedisMessage>(getSetBitResponse);
+                Assert.Equal(1, getSetBit.Value);
+
+                channel.WriteInbound(Command("GETBIT", "bits", "8"));
+                channel.RunPendingTasks();
+
+                var getUnsetBitResponse = ReadOutbound(channel);
+                var getUnsetBit = Assert.IsType<IntegerRedisMessage>(getUnsetBitResponse);
+                Assert.Equal(0, getUnsetBit.Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
+        /// Verifies BITCOUNT over full values and ranged byte windows.
+        /// </summary>
+        public async Task BitCount_CountsFullAndRangedWindows()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("SETBIT", "bits", "0", "1"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("SETBIT", "bits", "8", "1"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("SETBIT", "bits", "15", "1"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("BITCOUNT", "bits"));
+                channel.RunPendingTasks();
+
+                var allBitsResponse = ReadOutbound(channel);
+                var allBits = Assert.IsType<IntegerRedisMessage>(allBitsResponse);
+                Assert.Equal(3, allBits.Value);
+
+                channel.WriteInbound(Command("BITCOUNT", "bits", "0", "0"));
+                channel.RunPendingTasks();
+
+                var firstByteResponse = ReadOutbound(channel);
+                var firstByte = Assert.IsType<IntegerRedisMessage>(firstByteResponse);
+                Assert.Equal(1, firstByte.Value);
+
+                channel.WriteInbound(Command("BITCOUNT", "bits", "-1", "-1"));
+                channel.RunPendingTasks();
+
+                var lastByteResponse = ReadOutbound(channel);
+                var lastByte = Assert.IsType<IntegerRedisMessage>(lastByteResponse);
+                Assert.Equal(2, lastByte.Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
+        /// Verifies BITFIELD supports GET/SET/INCRBY and overflow handling.
+        /// </summary>
+        public async Task BitField_GetSetIncrBy_AndOverflowModes()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("BITFIELD", "bf", "SET", "u8", "0", "200", "GET", "u8", "0", "INCRBY", "u8", "0", "60"));
+                channel.RunPendingTasks();
+
+                var firstResponse = ReadOutbound(channel);
+                var firstArray = Assert.IsType<ArrayRedisMessage>(firstResponse);
+                Assert.Equal(3, firstArray.Children.Count);
+                Assert.Equal(0, Assert.IsType<IntegerRedisMessage>(firstArray.Children[0]).Value);
+                Assert.Equal(200, Assert.IsType<IntegerRedisMessage>(firstArray.Children[1]).Value);
+                Assert.Equal(4, Assert.IsType<IntegerRedisMessage>(firstArray.Children[2]).Value);
+
+                channel.WriteInbound(Command("BITFIELD", "bf", "SET", "i8", "0", "120"));
+                channel.RunPendingTasks();
+
+                var setSignedResponse = ReadOutbound(channel);
+                var setSignedArray = Assert.IsType<ArrayRedisMessage>(setSignedResponse);
+                Assert.Single(setSignedArray.Children);
+                Assert.Equal(4, Assert.IsType<IntegerRedisMessage>(setSignedArray.Children[0]).Value);
+
+                channel.WriteInbound(Command("BITFIELD", "bf", "OVERFLOW", "SAT", "INCRBY", "i8", "0", "20"));
+                channel.RunPendingTasks();
+
+                var satResponse = ReadOutbound(channel);
+                var satArray = Assert.IsType<ArrayRedisMessage>(satResponse);
+                Assert.Single(satArray.Children);
+                Assert.Equal(127, Assert.IsType<IntegerRedisMessage>(satArray.Children[0]).Value);
+
+                channel.WriteInbound(Command("BITFIELD", "bf", "OVERFLOW", "FAIL", "INCRBY", "i8", "0", "1", "GET", "i8", "0"));
+                channel.RunPendingTasks();
+
+                var failResponse = ReadOutbound(channel);
+                var failArray = Assert.IsType<ArrayRedisMessage>(failResponse);
+                Assert.Equal(2, failArray.Children.Count);
+                Assert.Same(FullBulkStringRedisMessage.Null, failArray.Children[0]);
+                Assert.Equal(127, Assert.IsType<IntegerRedisMessage>(failArray.Children[1]).Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
         /// Verifies EXPIRE and TTL report remaining seconds.
         /// </summary>
         public async Task Expire_Ttl_ReturnsRemainingSeconds()
