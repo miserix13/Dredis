@@ -2791,6 +2791,26 @@ namespace Dredis.Tests
         }
 
         [Fact]
+        public async Task TimeSeries_MultiRevRange_FilterWithoutPredicates_ReturnsInvalidArguments()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("TS.MREVRANGE", "-", "+", "FILTER"));
+                channel.RunPendingTasks();
+
+                var error = Assert.IsType<ErrorRedisMessage>(ReadOutbound(channel));
+                Assert.Equal("ERR invalid arguments", error.Content);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
         public async Task Publish_NoSubscribers_ReturnsZero()
         {
             DredisCommandHandler.PubSubManager.Clear();
