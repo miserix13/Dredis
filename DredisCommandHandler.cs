@@ -2343,125 +2343,9 @@ namespace Dredis
             IChannelHandlerContext ctx,
             IList<IRedisMessage> args)
         {
-            if (args.Count < 5)
+            if (!TryParseVectorSearchHeader(args, out var keyPrefix, out var topK, out var offset, out var metric, out var index, out var parseError))
             {
-                WriteError(ctx, "ERR wrong number of arguments for 'vsearch' command");
-                return;
-            }
-
-            if (!TryGetString(args[1], out var keyPrefix))
-            {
-                WriteError(ctx, "ERR null bulk string");
-                return;
-            }
-
-            if (!TryGetString(args[2], out var token2))
-            {
-                WriteError(ctx, "ERR null bulk string");
-                return;
-            }
-
-            int topK;
-            int offset = 0;
-            string metric;
-            int index;
-            bool positionalForm;
-
-            if (int.TryParse(token2, out var positionalTopK))
-            {
-                if (positionalTopK <= 0)
-                {
-                    WriteError(ctx, "ERR value is not an integer or out of range");
-                    return;
-                }
-
-                topK = positionalTopK;
-                if (!TryGetString(args[3], out metric))
-                {
-                    WriteError(ctx, "ERR null bulk string");
-                    return;
-                }
-
-                index = 4;
-                positionalForm = true;
-            }
-            else
-            {
-                metric = token2;
-                topK = -1;
-                index = 3;
-                positionalForm = false;
-            }
-
-            if (positionalForm)
-            {
-                if (index + 1 < args.Count && TryGetString(args[index], out var option))
-                {
-                    if (option.Equals("LIMIT", StringComparison.OrdinalIgnoreCase))
-                    {
-                        WriteError(ctx, "ERR syntax error");
-                        return;
-                    }
-
-                    if (option.Equals("OFFSET", StringComparison.OrdinalIgnoreCase))
-                    {
-                        if (!TryGetString(args[index + 1], out var offsetText) || !int.TryParse(offsetText, out offset) || offset < 0)
-                        {
-                            WriteError(ctx, "ERR value is not an integer or out of range");
-                            return;
-                        }
-
-                        index += 2;
-                    }
-                }
-            }
-            else
-            {
-                if (args.Count < 4)
-                {
-                    WriteError(ctx, "ERR wrong number of arguments for 'vsearch' command");
-                    return;
-                }
-
-                if (!TryGetString(args[index], out var limitToken) ||
-                    !limitToken.Equals("LIMIT", StringComparison.OrdinalIgnoreCase))
-                {
-                    WriteError(ctx, "ERR LIMIT is required");
-                    return;
-                }
-
-                if (!TryGetString(args[index + 1], out var limitText) || !int.TryParse(limitText, out topK) || topK <= 0)
-                {
-                    WriteError(ctx, "ERR value is not an integer or out of range");
-                    return;
-                }
-
-                index += 2;
-
-                if (index + 1 < args.Count && TryGetString(args[index], out var offsetToken) &&
-                    offsetToken.Equals("OFFSET", StringComparison.OrdinalIgnoreCase))
-                {
-                    if (!TryGetString(args[index + 1], out var offsetText) || !int.TryParse(offsetText, out offset) || offset < 0)
-                    {
-                        WriteError(ctx, "ERR value is not an integer or out of range");
-                        return;
-                    }
-
-                    index += 2;
-                }
-            }
-
-            if (index < args.Count && TryGetString(args[index], out var unexpectedToken) &&
-                (unexpectedToken.Equals("LIMIT", StringComparison.OrdinalIgnoreCase) ||
-                 unexpectedToken.Equals("OFFSET", StringComparison.OrdinalIgnoreCase)))
-            {
-                WriteError(ctx, "ERR syntax error");
-                return;
-            }
-
-            if (args.Count <= index)
-            {
-                WriteError(ctx, "ERR wrong number of arguments for 'vsearch' command");
+                WriteError(ctx, parseError);
                 return;
             }
 
@@ -2502,6 +2386,154 @@ namespace Dredis
             }
 
             WriteArray(ctx, children);
+        }
+
+        private static bool TryParseVectorSearchHeader(
+            IList<IRedisMessage> args,
+            out string keyPrefix,
+            out int topK,
+            out int offset,
+            out string metric,
+            out int vectorStartIndex,
+            out string parseError)
+        {
+            keyPrefix = string.Empty;
+            topK = 0;
+            offset = 0;
+            metric = string.Empty;
+            vectorStartIndex = 0;
+            parseError = "ERR wrong number of arguments for 'vsearch' command";
+
+            if (args.Count < 5)
+            {
+                return false;
+            }
+
+            if (!TryGetString(args[1], out keyPrefix) || !TryGetString(args[2], out var token2))
+            {
+                parseError = "ERR null bulk string";
+                return false;
+            }
+
+            if (int.TryParse(token2, out var positionalTopK))
+            {
+                if (positionalTopK <= 0)
+                {
+                    parseError = "ERR value is not an integer or out of range";
+                    return false;
+                }
+
+                topK = positionalTopK;
+                if (!TryGetString(args[3], out metric))
+                {
+                    parseError = "ERR null bulk string";
+                    return false;
+                }
+
+                int index = 4;
+                if (!TryConsumeOptionInt(args, ref index, "OFFSET", allowZero: true, out offset, out parseError))
+                {
+                    return false;
+                }
+
+                if (index < args.Count && TryGetString(args[index], out var unexpectedPositional) &&
+                    (unexpectedPositional.Equals("LIMIT", StringComparison.OrdinalIgnoreCase) ||
+                     unexpectedPositional.Equals("OFFSET", StringComparison.OrdinalIgnoreCase)))
+                {
+                    parseError = "ERR syntax error";
+                    return false;
+                }
+
+                if (args.Count <= index)
+                {
+                    parseError = "ERR wrong number of arguments for 'vsearch' command";
+                    return false;
+                }
+
+                vectorStartIndex = index;
+                return true;
+            }
+
+            metric = token2;
+            int metricIndex = 3;
+
+            if (!TryConsumeOptionInt(args, ref metricIndex, "LIMIT", allowZero: false, out topK, out parseError, required: true, missingError: "ERR LIMIT is required"))
+            {
+                return false;
+            }
+
+            if (!TryConsumeOptionInt(args, ref metricIndex, "OFFSET", allowZero: true, out offset, out parseError))
+            {
+                return false;
+            }
+
+            if (metricIndex < args.Count && TryGetString(args[metricIndex], out var unexpectedMetric) &&
+                (unexpectedMetric.Equals("LIMIT", StringComparison.OrdinalIgnoreCase) ||
+                 unexpectedMetric.Equals("OFFSET", StringComparison.OrdinalIgnoreCase)))
+            {
+                parseError = "ERR syntax error";
+                return false;
+            }
+
+            if (args.Count <= metricIndex)
+            {
+                parseError = "ERR wrong number of arguments for 'vsearch' command";
+                return false;
+            }
+
+            vectorStartIndex = metricIndex;
+            return true;
+        }
+
+        private static bool TryConsumeOptionInt(
+            IList<IRedisMessage> args,
+            ref int index,
+            string optionName,
+            bool allowZero,
+            out int value,
+            out string parseError,
+            bool required = false,
+            string? missingError = null)
+        {
+            value = 0;
+            parseError = string.Empty;
+
+            if (index >= args.Count || !TryGetString(args[index], out var token))
+            {
+                if (required)
+                {
+                    parseError = missingError ?? "ERR syntax error";
+                    return false;
+                }
+
+                return true;
+            }
+
+            if (!token.Equals(optionName, StringComparison.OrdinalIgnoreCase))
+            {
+                if (required)
+                {
+                    parseError = missingError ?? "ERR syntax error";
+                    return false;
+                }
+
+                return true;
+            }
+
+            if (index + 1 >= args.Count || !TryGetString(args[index + 1], out var valueText) || !int.TryParse(valueText, out value))
+            {
+                parseError = "ERR value is not an integer or out of range";
+                return false;
+            }
+
+            if ((allowZero && value < 0) || (!allowZero && value <= 0))
+            {
+                parseError = "ERR value is not an integer or out of range";
+                return false;
+            }
+
+            index += 2;
+            return true;
         }
 
         private async Task HandlePublishAsync(
