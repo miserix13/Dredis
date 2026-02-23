@@ -47,7 +47,7 @@ jobs:
         id: login
         uses: NuGet/login@v1
         with:
-          env: ${{ secrets.NUGET_USERNAME }}
+          user: ${{ secrets.NUGET_USERNAME }}
 
       - name: Push packages to NuGet.org
         run: |
