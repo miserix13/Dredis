@@ -2,6 +2,10 @@
 
 A .NET 10 implementation of the Redis Serialization Protocol using DotNetty and C# with a storage abstraction.
 
+Further reading:
+
+- [Dredis vs Redis and Alternatives](Dredis-vs-Redis-and-Alternatives.md)
+
 ## RESP implementation status
 
 Currently implemented RESP commands and behavior:
