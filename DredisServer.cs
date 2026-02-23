@@ -3,6 +3,7 @@ using DotNetty.Codecs.Redis;
 using DotNetty.Transport.Bootstrapping;
 using DotNetty.Transport.Channels;
 using DotNetty.Transport.Channels.Sockets;
+using Dredis.Abstractions.Command;
 using Dredis.Abstractions.Storage;
 
 namespace Dredis
@@ -14,6 +15,8 @@ namespace Dredis
     {
         private readonly IKeyValueStore _store;
         private readonly SemaphoreSlim _lifecycleLock = new(1, 1);
+        private readonly Dictionary<string, ICommand> _commands = new(StringComparer.OrdinalIgnoreCase);
+        private readonly object _commandsLock = new();
         private IEventLoopGroup? _bossGroup;
         private IEventLoopGroup? _workerGroup;
         private IChannel? _channel;
@@ -25,6 +28,31 @@ namespace Dredis
         public DredisServer(IKeyValueStore store)
         {
             _store = store;
+        }
+
+        /// <summary>
+        /// Registers custom commands that will be applied to command handlers for incoming connections.
+        /// </summary>
+        /// <param name="commands">The custom commands to register.</param>
+        public void Register(params ICommand[] commands)
+        {
+            if (commands == null || commands.Length == 0)
+            {
+                return;
+            }
+
+            lock (_commandsLock)
+            {
+                foreach (var command in commands)
+                {
+                    if (command == null || string.IsNullOrWhiteSpace(command.Name))
+                    {
+                        continue;
+                    }
+
+                    _commands[command.Name] = command;
+                }
+            }
         }
 
         /// <summary>
@@ -102,7 +130,15 @@ namespace Dredis
                         p.AddLast("redisEncoder", new RedisEncoder());
 
                         // Your abstraction bridge
-                        p.AddLast("dredisHandler", new DredisCommandHandler(_store));
+                        var handler = new DredisCommandHandler(_store);
+                        ICommand[] registeredCommands;
+                        lock (_commandsLock)
+                        {
+                            registeredCommands = _commands.Values.ToArray();
+                        }
+
+                        handler.Register(registeredCommands);
+                        p.AddLast("dredisHandler", handler);
                     }));
 
                 channel = await bootstrap.BindAsync(IPAddress.Loopback, port);

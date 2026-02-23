@@ -66,6 +66,33 @@ namespace Dredis.Tests
             await serverTask;
         }
 
+        [Fact]
+        /// <summary>
+        /// Verifies custom commands registered on the server flow into connection handlers.
+        /// </summary>
+        public async Task RunAsync_CustomCommand_RegisteredOnServer_FlowsToHandler()
+        {
+            var store = new InMemoryKeyValueStore();
+            var server = new DredisServer(store);
+            server.Register(new DelegateCommand("HELLO", parameters => Task.FromResult($"hello:{string.Join(",", parameters)}")));
+            var port = GetFreePort();
+
+            var serverTask = server.RunAsync(port);
+
+            using var client = await ConnectWithRetryAsync(port);
+
+            await SendAsync(client, "*3\r\n$5\r\nHELLO\r\n$3\r\none\r\n$3\r\ntwo\r\n");
+            var bulkHeader = await ReadLineAsync(client);
+            Assert.Equal("$13", bulkHeader);
+
+            var bulkValue = await ReadBulkStringAsync(client, 13);
+            Assert.Equal("hello:one,two", bulkValue);
+
+            client.Close();
+            await server.StopAsync();
+            await serverTask;
+        }
+
         /// <summary>
         /// Finds an available TCP port on localhost.
         /// </summary>

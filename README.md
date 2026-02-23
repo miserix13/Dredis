@@ -118,6 +118,36 @@ Dredis is built on a modular architecture with the following components:
 
 The JSON implementation uses `System.Text.Json` for parsing and manipulation, and supports JSONPath syntax for navigating JSON documents. All JSON commands support both single and multi-path operations where applicable.
 
+## Custom commands
+
+You can register custom RESP commands on `DredisServer` before calling `StartAsync` or `RunAsync`. Registered commands are automatically applied to each connection's `DredisCommandHandler`.
+
+```csharp
+using Dredis;
+using Dredis.Abstractions.Command;
+using Dredis.Abstractions.Storage;
+
+public sealed class HelloCommand : ICommand
+{
+	public string Name => "HELLO";
+
+	public Task<string> ExecuteAsync(params string[] parameters)
+	{
+		var payload = parameters.Length == 0 ? "world" : string.Join(',', parameters);
+		return Task.FromResult($"hello:{payload}");
+	}
+}
+
+var store = new MyKeyValueStore(); // your IKeyValueStore implementation
+var server = new DredisServer(store);
+
+server.Register(new HelloCommand());
+
+await server.RunAsync(6379);
+```
+
+From a Redis client, this command can be called as `HELLO` or `HELLO one two`, and returns a bulk-string reply.
+
 ## Short roadmap
 
 - Additional Redis commands as needed
