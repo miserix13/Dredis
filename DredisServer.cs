@@ -5,6 +5,7 @@ using DotNetty.Transport.Channels;
 using DotNetty.Transport.Channels.Sockets;
 using Dredis.Abstractions.Command;
 using Dredis.Abstractions.Storage;
+using Microsoft.Extensions.Configuration;
 
 namespace Dredis
 {
@@ -14,6 +15,7 @@ namespace Dredis
     public sealed class DredisServer
     {
         private readonly IKeyValueStore _store;
+        private readonly DredisServerOptions _options;
         private readonly SemaphoreSlim _lifecycleLock = new(1, 1);
         private readonly Dictionary<string, ICommand> _commands = new(StringComparer.OrdinalIgnoreCase);
         private readonly object _commandsLock = new();
@@ -26,8 +28,31 @@ namespace Dredis
         /// </summary>
         /// <param name="store">The storage abstraction used for command handling.</param>
         public DredisServer(IKeyValueStore store)
+            : this(store, new DredisServerOptions())
         {
-            _store = store;
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="DredisServer"/> class.
+        /// </summary>
+        /// <param name="store">The storage abstraction used for command handling.</param>
+        /// <param name="options">The server options.</param>
+        public DredisServer(IKeyValueStore store, DredisServerOptions options)
+        {
+            _store = store ?? throw new ArgumentNullException(nameof(store));
+            DredisServerOptions.Validate(options);
+            _options = options.Clone();
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="DredisServer"/> class using configuration binding.
+        /// </summary>
+        /// <param name="store">The storage abstraction used for command handling.</param>
+        /// <param name="configuration">The configuration root.</param>
+        /// <param name="sectionName">The section containing server options. Defaults to <c>DredisServer</c>.</param>
+        public DredisServer(IKeyValueStore store, IConfiguration configuration, string sectionName = "DredisServer")
+            : this(store, DredisServerOptions.FromConfiguration(configuration, sectionName))
+        {
         }
 
         /// <summary>
@@ -62,7 +87,11 @@ namespace Dredis
         /// <param name="token">A cancellation token used to stop the server.</param>
         public async Task RunAsync(int port, CancellationToken token = default)
         {
-            await StartAsync(port, token);
+            var options = _options.Clone();
+            options.Port = port;
+            DredisServerOptions.Validate(options);
+
+            await StartAsync(options, token);
 
             IChannel? channel;
             await _lifecycleLock.WaitAsync(token);
@@ -100,6 +129,62 @@ namespace Dredis
         /// <param name="token">A cancellation token used to abort startup.</param>
         public async Task StartAsync(int port, CancellationToken token = default)
         {
+            var options = _options.Clone();
+            options.Port = port;
+            DredisServerOptions.Validate(options);
+
+            await StartAsync(options, token);
+        }
+
+        /// <summary>
+        /// Starts the server, waits for shutdown, and ensures resources are released.
+        /// </summary>
+        /// <param name="token">A cancellation token used to stop the server.</param>
+        public Task RunAsync(CancellationToken token = default)
+            => RunAsync(_options, token);
+
+        /// <summary>
+        /// Starts the server without blocking for shutdown.
+        /// </summary>
+        /// <param name="token">A cancellation token used to abort startup.</param>
+        public Task StartAsync(CancellationToken token = default)
+            => StartAsync(_options, token);
+
+        private async Task RunAsync(DredisServerOptions options, CancellationToken token)
+        {
+            await StartAsync(options, token);
+
+            IChannel? channel;
+            await _lifecycleLock.WaitAsync(token);
+            try
+            {
+                channel = _channel;
+            }
+            finally
+            {
+                _lifecycleLock.Release();
+            }
+
+            if (channel == null)
+            {
+                return;
+            }
+
+            try
+            {
+                using (token.Register(() => _ = StopAsync()))
+                {
+                    await channel.CloseCompletion;
+                }
+            }
+            finally
+            {
+                await StopAsync();
+            }
+        }
+
+        private async Task StartAsync(DredisServerOptions options, CancellationToken token)
+        {
             await _lifecycleLock.WaitAsync(token);
 
             IEventLoopGroup? bossGroup = null;
@@ -113,8 +198,10 @@ namespace Dredis
                     throw new InvalidOperationException("Server is already running.");
                 }
 
-                bossGroup = new MultithreadEventLoopGroup(1);
-                workerGroup = new MultithreadEventLoopGroup();
+                bossGroup = new MultithreadEventLoopGroup(options.BossGroupThreadCount);
+                workerGroup = options.WorkerGroupThreadCount.HasValue
+                    ? new MultithreadEventLoopGroup(options.WorkerGroupThreadCount.Value)
+                    : new MultithreadEventLoopGroup();
 
                 var bootstrap = new ServerBootstrap()
                     .Group(bossGroup, workerGroup)
@@ -141,7 +228,7 @@ namespace Dredis
                         p.AddLast("dredisHandler", handler);
                     }));
 
-                channel = await bootstrap.BindAsync(IPAddress.Loopback, port);
+                channel = await bootstrap.BindAsync(IPAddress.Parse(options.BindAddress), options.Port);
 
                 _bossGroup = bossGroup;
                 _workerGroup = workerGroup;

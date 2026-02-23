@@ -148,6 +148,51 @@ await server.RunAsync(6379);
 
 From a Redis client, this command can be called as `HELLO` or `HELLO one two`, and returns a bulk-string reply.
 
+## Server options and configuration
+
+`DredisServer` now supports an options model (`DredisServerOptions`) and configuration binding via `Microsoft.Extensions.Configuration`.
+
+### Option keys
+
+- `BindAddress` (default: `127.0.0.1`)
+- `Port` (default: `6379`)
+- `BossGroupThreadCount` (default: `1`)
+- `WorkerGroupThreadCount` (optional; when omitted, DotNetty default sizing is used)
+
+### Configure with appsettings.json
+
+```json
+{
+    "DredisServer": {
+        "BindAddress": "127.0.0.1",
+        "Port": 6379,
+        "BossGroupThreadCount": 1,
+        "WorkerGroupThreadCount": 4
+    }
+}
+```
+
+```csharp
+using Dredis;
+using Dredis.Abstractions.Storage;
+using Microsoft.Extensions.Configuration;
+
+var configuration = new ConfigurationBuilder()
+        .AddJsonFile("appsettings.json", optional: false)
+        .Build();
+
+var store = new MyKeyValueStore();
+var server = new DredisServer(store, configuration);
+
+await server.RunAsync(); // Uses DredisServer section values
+```
+
+You can still override just the port at call-time:
+
+```csharp
+await server.RunAsync(6380);
+```
+
 ### Choosing an extension model
 
 Use `ICommand` when:
