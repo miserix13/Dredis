@@ -118,6 +118,17 @@ Dredis is built on a modular architecture with the following components:
 
 The JSON implementation uses `System.Text.Json` for parsing and manipulation, and supports JSONPath syntax for navigating JSON documents. All JSON commands support both single and multi-path operations where applicable.
 
+## Authentication and authorization abstraction
+
+`Dredis.Abstractions.Auth` provides a standalone contract package for authentication and authorization integration.
+
+- `IAuthenticationProvider` validates incoming credentials and returns an `AuthenticatedIdentity` when successful.
+- `IAuthorizationProvider` evaluates whether an authenticated identity can perform a requested action/resource operation.
+- `AuthenticationRequest` and `AuthorizationRequest` define the request payloads for provider implementations.
+- `AuthorizationDecision` provides a simple `Allow`/`Deny` decision model.
+
+This abstraction is intentionally implementation-agnostic so hosts can plug in custom identity providers, API key validation, JWT processing, role/claim checks, or policy engines without coupling to server internals.
+
 ## Custom commands
 
 You can register custom RESP commands on `DredisServer` before calling `StartAsync` or `RunAsync`. Registered commands are automatically applied to each connection's `DredisCommandHandler`.

@@ -1,4 +1,5 @@
 <Solution>
+  <Project Path="Dredis.Abstractions.Auth/Dredis.Abstractions.Auth.csproj" />
   <Project Path="Dredis.Abstractions.Command/Dredis.Abstractions.Command.csproj" Id="3e1d6527-d55e-4311-bc20-52e438468a2c" />
   <Project Path="Dredis.Abstractions.Storage/Dredis.Abstractions.Storage.csproj" />
   <Project Path="Dredis.csproj" />
