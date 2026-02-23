@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using Dredis.Abstractions.Storage;
+using Microsoft.Extensions.Configuration;
 using Xunit;
 
 namespace Dredis.Tests
@@ -87,6 +88,38 @@ namespace Dredis.Tests
 
             var bulkValue = await ReadBulkStringAsync(client, 13);
             Assert.Equal("hello:one,two", bulkValue);
+
+            client.Close();
+            await server.StopAsync();
+            await serverTask;
+        }
+
+        [Fact]
+        /// <summary>
+        /// Verifies server options can be bound from IConfiguration and used by RunAsync without an explicit port argument.
+        /// </summary>
+        public async Task RunAsync_WithConfiguration_UsesConfiguredPortAndResponds()
+        {
+            var store = new InMemoryKeyValueStore();
+            var port = GetFreePort();
+
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["DredisServer:BindAddress"] = "127.0.0.1",
+                    ["DredisServer:Port"] = port.ToString(),
+                    ["DredisServer:BossGroupThreadCount"] = "1"
+                })
+                .Build();
+
+            var server = new DredisServer(store, configuration);
+            var serverTask = server.RunAsync();
+
+            using var client = await ConnectWithRetryAsync(port);
+            await SendAsync(client, "*1\r\n$4\r\nPING\r\n");
+
+            var response = await ReadLineAsync(client);
+            Assert.Equal("+PONG", response);
 
             client.Close();
             await server.StopAsync();
