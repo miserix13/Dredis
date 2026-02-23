@@ -299,10 +299,10 @@ Dispatch order for unknown commands is:
 
 ## Redis trademark and copyright notice
 
-- Redis is a registered trademark of Redis Ltd. Any rights in the Redis name and related marks belong to Redis Ltd.
-- Redis software, source code, and official documentation are copyrighted by their respective owners.
-- Dredis is an independent, community project and is not affiliated with, endorsed by, or sponsored by Redis Ltd.
-- Official trademark policy: https://redis.io/legal/trademark-guidelines/
+- Redis® is a registered trademark of Redis Ltd.; all rights in the Redis name and related marks are reserved to Redis Ltd.
+- Copyright in Redis software, source code, and official documentation remains with their respective owners.
+- Dredis is an independent community project and is not affiliated with, endorsed by, or sponsored by Redis Ltd.
+- For current trademark usage requirements, see the official policy: <https://redis.io/legal/trademark-guidelines/>.
 
 ## Short roadmap
 
