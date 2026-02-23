@@ -144,6 +144,24 @@ namespace Dredis.Tests
             Assert.Throws<ArgumentOutOfRangeException>(() => new DredisServer(store, configuration));
         }
 
+        [Fact]
+        /// <summary>
+        /// Verifies invalid bind addresses fail fast during server construction.
+        /// </summary>
+        public void Constructor_WithConfiguration_InvalidBindAddress_Throws()
+        {
+            var store = new InMemoryKeyValueStore();
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["DredisServer:BindAddress"] = "invalid-ip",
+                    ["DredisServer:Port"] = "6379"
+                })
+                .Build();
+
+            Assert.Throws<ArgumentException>(() => new DredisServer(store, configuration));
+        }
+
         /// <summary>
         /// Finds an available TCP port on localhost.
         /// </summary>
