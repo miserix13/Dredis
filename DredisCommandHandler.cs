@@ -1335,12 +1335,89 @@ namespace Dredis
                     break;
 
                 default:
-                    if (!await TryHandleCustomCommandAsync(ctx, elements, cmd))
+                    if (!await TryHandleCustomDataTypeAsync(ctx, elements, cmd) &&
+                        !await TryHandleCustomCommandAsync(ctx, elements, cmd))
                     {
                         WriteError(ctx, $"ERR unknown command '{cmd}'");
                     }
                     break;
             }
+        }
+
+        private async Task<bool> TryHandleCustomDataTypeAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args, string commandName)
+        {
+            if (_store is not ICustomDataTypeStore customDataTypeStore)
+            {
+                return false;
+            }
+
+            var parameters = new string[args.Count - 1];
+            for (var i = 1; i < args.Count; i++)
+            {
+                if (!TryGetString(args[i], out var parameter))
+                {
+                    WriteError(ctx, "ERR null bulk string");
+                    return true;
+                }
+
+                parameters[i - 1] = parameter;
+            }
+
+            var result = await customDataTypeStore.TryExecuteCustomDataTypeAsync(commandName, parameters);
+            if (!result.Handled)
+            {
+                return false;
+            }
+
+            switch (result.ResponseKind)
+            {
+                case CustomDataTypeResponseKind.SimpleString:
+                    WriteSimpleString(ctx, result.Text ?? string.Empty);
+                    break;
+
+                case CustomDataTypeResponseKind.Error:
+                    WriteError(ctx, result.Text ?? "ERR custom data type command failed");
+                    break;
+
+                case CustomDataTypeResponseKind.Integer:
+                    WriteInteger(ctx, result.Integer);
+                    break;
+
+                case CustomDataTypeResponseKind.BulkString:
+                    if (result.Bulk == null)
+                    {
+                        WriteNullBulkString(ctx);
+                    }
+                    else
+                    {
+                        WriteBulkString(ctx, result.Bulk);
+                    }
+
+                    break;
+
+                case CustomDataTypeResponseKind.NullBulkString:
+                    WriteNullBulkString(ctx);
+                    break;
+
+                case CustomDataTypeResponseKind.Array:
+                    var arrayValues = result.Array ?? Array.Empty<byte[]?>();
+                    var children = new IRedisMessage[arrayValues.Length];
+                    for (var i = 0; i < arrayValues.Length; i++)
+                    {
+                        children[i] = arrayValues[i] == null
+                            ? FullBulkStringRedisMessage.Null
+                            : new FullBulkStringRedisMessage(Unpooled.WrappedBuffer(arrayValues[i]!));
+                    }
+
+                    WriteArray(ctx, children);
+                    break;
+
+                default:
+                    WriteError(ctx, "ERR unsupported custom data type response");
+                    break;
+            }
+
+            return true;
         }
 
         private async Task<bool> TryHandleCustomCommandAsync(IChannelHandlerContext ctx, IList<IRedisMessage> args, string commandName)

@@ -148,6 +148,59 @@ await server.RunAsync(6379);
 
 From a Redis client, this command can be called as `HELLO` or `HELLO one two`, and returns a bulk-string reply.
 
+### Choosing an extension model
+
+Use `ICommand` when:
+
+- You want to add application-level custom commands with simple string in/out behavior.
+- You prefer explicit registration on `DredisServer` via `server.Register(...)`.
+- You do not need to extend your storage abstraction.
+
+Use `ICustomDataTypeStore` when:
+
+- You are implementing storage-backed custom data type commands.
+- You want unknown commands to flow through the storage layer without changing `IKeyValueStore`.
+- You need richer RESP response shapes (integer, error, bulk, null bulk, array).
+
+Compatibility note:
+
+- Existing `IKeyValueStore` implementations remain fully compatible with no code changes.
+- `ICustomDataTypeStore` is optional and only needed when you want unknown-command flow-through for custom data types.
+- If `ICustomDataTypeStore` is not implemented, unknown commands continue through registered `ICommand` handlers and then standard unknown-command behavior.
+
+Example skeleton:
+
+```csharp
+using Dredis.Abstractions.Storage;
+
+public sealed class MyStore : IKeyValueStore, ICustomDataTypeStore
+{
+    public Task<CustomDataTypeResult> TryExecuteCustomDataTypeAsync(string command, string[] args, CancellationToken token = default)
+    {
+        if (string.Equals(command, "CTYPE.ECHO", StringComparison.OrdinalIgnoreCase))
+        {
+            var payload = args.Length == 0 ? string.Empty : string.Join(',', args);
+            return Task.FromResult(CustomDataTypeResult.BulkString(System.Text.Encoding.UTF8.GetBytes($"ctype:{payload}")));
+        }
+
+        return Task.FromResult(CustomDataTypeResult.NotHandled);
+    }
+
+    // Implement IKeyValueStore members...
+}
+```
+
+Dispatch order for unknown commands is:
+
+1. `ICustomDataTypeStore` (if implemented by the active store)
+2. Registered `ICommand` handlers
+3. Standard unknown-command error
+
+## Changelog
+
+- Added optional `ICustomDataTypeStore` extension to support storage-backed custom data type commands without introducing breaking changes to `IKeyValueStore`.
+- Unknown command resolution now flows through `ICustomDataTypeStore` (when implemented), then registered `ICommand` handlers, then standard unknown-command behavior.
+
 ## Short roadmap
 
 - Additional Redis commands as needed

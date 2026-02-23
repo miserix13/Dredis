@@ -1636,6 +1636,131 @@ namespace Dredis.Abstractions.Storage
     }
 
     /// <summary>
+    /// Describes response kinds for custom data type command execution.
+    /// </summary>
+    public enum CustomDataTypeResponseKind
+    {
+        SimpleString,
+        Error,
+        Integer,
+        BulkString,
+        NullBulkString,
+        Array
+    }
+
+    /// <summary>
+    /// Represents an optional custom data type command execution result.
+    /// </summary>
+    public sealed class CustomDataTypeResult
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="CustomDataTypeResult"/> class.
+        /// </summary>
+        public CustomDataTypeResult(
+            bool handled,
+            CustomDataTypeResponseKind responseKind,
+            string? text,
+            long integer,
+            byte[]? bulk,
+            byte[]?[]? array)
+        {
+            Handled = handled;
+            ResponseKind = responseKind;
+            Text = text;
+            Integer = integer;
+            Bulk = bulk;
+            Array = array;
+        }
+
+        /// <summary>
+        /// Gets a value indicating whether the command was handled.
+        /// </summary>
+        public bool Handled { get; }
+
+        /// <summary>
+        /// Gets the response kind for handled commands.
+        /// </summary>
+        public CustomDataTypeResponseKind ResponseKind { get; }
+
+        /// <summary>
+        /// Gets a text payload used by simple string or error responses.
+        /// </summary>
+        public string? Text { get; }
+
+        /// <summary>
+        /// Gets the integer payload.
+        /// </summary>
+        public long Integer { get; }
+
+        /// <summary>
+        /// Gets the bulk string payload.
+        /// </summary>
+        public byte[]? Bulk { get; }
+
+        /// <summary>
+        /// Gets the array payload.
+        /// </summary>
+        public byte[]?[]? Array { get; }
+
+        /// <summary>
+        /// Gets a result indicating the command is not handled.
+        /// </summary>
+        public static CustomDataTypeResult NotHandled { get; } =
+            new CustomDataTypeResult(false, CustomDataTypeResponseKind.NullBulkString, null, 0, null, null);
+
+        /// <summary>
+        /// Creates a simple string response.
+        /// </summary>
+        public static CustomDataTypeResult SimpleString(string text) =>
+            new CustomDataTypeResult(true, CustomDataTypeResponseKind.SimpleString, text, 0, null, null);
+
+        /// <summary>
+        /// Creates an error response.
+        /// </summary>
+        public static CustomDataTypeResult Error(string text) =>
+            new CustomDataTypeResult(true, CustomDataTypeResponseKind.Error, text, 0, null, null);
+
+        /// <summary>
+        /// Creates an integer response.
+        /// </summary>
+        public static CustomDataTypeResult IntegerResult(long value) =>
+            new CustomDataTypeResult(true, CustomDataTypeResponseKind.Integer, null, value, null, null);
+
+        /// <summary>
+        /// Creates a bulk string response.
+        /// </summary>
+        public static CustomDataTypeResult BulkString(byte[] value) =>
+            new CustomDataTypeResult(true, CustomDataTypeResponseKind.BulkString, null, 0, value, null);
+
+        /// <summary>
+        /// Creates a null bulk string response.
+        /// </summary>
+        public static CustomDataTypeResult NullBulkString() =>
+            new CustomDataTypeResult(true, CustomDataTypeResponseKind.NullBulkString, null, 0, null, null);
+
+        /// <summary>
+        /// Creates an array response.
+        /// </summary>
+        public static CustomDataTypeResult ArrayResult(byte[]?[] values) =>
+            new CustomDataTypeResult(true, CustomDataTypeResponseKind.Array, null, 0, null, values);
+    }
+
+    /// <summary>
+    /// Optional abstraction for custom data type command handling.
+    /// </summary>
+    public interface ICustomDataTypeStore
+    {
+        /// <summary>
+        /// Attempts to execute a custom data type command.
+        /// </summary>
+        /// <param name="command">The command name.</param>
+        /// <param name="args">The command arguments.</param>
+        /// <param name="token">A cancellation token that can be used to cancel the operation.</param>
+        /// <returns>A task that represents the asynchronous operation. The task result describes whether the command was handled and its response.</returns>
+        Task<CustomDataTypeResult> TryExecuteCustomDataTypeAsync(string command, string[] args, CancellationToken token = default);
+    }
+
+    /// <summary>
     /// Key-Value Storage abstraction for Dredis.
     /// </summary>
     public interface IKeyValueStore

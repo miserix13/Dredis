@@ -183,6 +183,30 @@ namespace Dredis.Tests
 
         [Fact]
         /// <summary>
+        /// Verifies unknown commands can flow through the optional custom data type store abstraction.
+        /// </summary>
+        public async Task CustomDataTypeStore_UnknownCommand_ExecutesThroughStore()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("CTYPE.ECHO", "one", "two"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var bulk = Assert.IsType<FullBulkStringRedisMessage>(response);
+                Assert.Equal("ctype:one,two", GetBulkString(bulk));
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
         /// Verifies SET followed by GET returns the stored value.
         /// </summary>
         public async Task Set_Get_RoundTrip()
@@ -4764,7 +4788,7 @@ namespace Dredis.Tests
     /// <summary>
     /// In-memory implementation of <see cref="IKeyValueStore"/> for tests.
     /// </summary>
-    internal sealed class InMemoryKeyValueStore : IKeyValueStore
+    internal sealed class InMemoryKeyValueStore : IKeyValueStore, ICustomDataTypeStore
     {
         private readonly Dictionary<string, byte[]> _data = new(StringComparer.Ordinal);
         private readonly Dictionary<string, Dictionary<string, byte[]>> _hashes = new(StringComparer.Ordinal);
@@ -4973,6 +4997,17 @@ namespace Dredis.Tests
             _timeSeriesDuplicatePolicy.Remove(key);
             _timeSeriesLabels.Remove(key);
             _expirations.Remove(key);
+        }
+
+        public Task<CustomDataTypeResult> TryExecuteCustomDataTypeAsync(string command, string[] args, CancellationToken token = default)
+        {
+            if (string.Equals(command, "CTYPE.ECHO", StringComparison.OrdinalIgnoreCase))
+            {
+                var payload = args.Length == 0 ? string.Empty : string.Join(',', args);
+                return Task.FromResult(CustomDataTypeResult.BulkString(Utf8.GetBytes($"ctype:{payload}")));
+            }
+
+            return Task.FromResult(CustomDataTypeResult.NotHandled);
         }
 
         /// <summary>
