@@ -129,13 +129,13 @@ using Dredis.Abstractions.Storage;
 
 public sealed class HelloCommand : ICommand
 {
-	public string Name => "HELLO";
+ public string Name => "HELLO";
 
-	public Task<string> ExecuteAsync(params string[] parameters)
-	{
-		var payload = parameters.Length == 0 ? "world" : string.Join(',', parameters);
-		return Task.FromResult($"hello:{payload}");
-	}
+ public Task<string> ExecuteAsync(params string[] parameters)
+ {
+  var payload = parameters.Length == 0 ? "world" : string.Join(',', parameters);
+  return Task.FromResult($"hello:{payload}");
+ }
 }
 
 var store = new MyKeyValueStore(); // your IKeyValueStore implementation
