@@ -129,6 +129,39 @@ The JSON implementation uses `System.Text.Json` for parsing and manipulation, an
 
 This abstraction is intentionally implementation-agnostic so hosts can plug in custom identity providers, API key validation, JWT processing, role/claim checks, or policy engines without coupling to server internals.
 
+Example skeleton:
+
+```csharp
+using Dredis.Abstractions.Auth;
+
+public sealed class MyAuthenticationProvider : IAuthenticationProvider
+{
+    public Task<AuthenticatedIdentity?> AuthenticateAsync(AuthenticationRequest request, CancellationToken cancellationToken = default)
+    {
+        if (request.Username == "admin" && request.Password == "secret")
+        {
+            var identity = new AuthenticatedIdentity(
+                SubjectId: "user:admin",
+                DisplayName: "Administrator",
+                Claims: new Dictionary<string, string> { ["role"] = "admin" });
+
+            return Task.FromResult<AuthenticatedIdentity?>(identity);
+        }
+
+        return Task.FromResult<AuthenticatedIdentity?>(null);
+    }
+}
+
+public sealed class MyAuthorizationProvider : IAuthorizationProvider
+{
+    public Task<AuthorizationDecision> AuthorizeAsync(AuthorizationRequest request, CancellationToken cancellationToken = default)
+    {
+        var isAdmin = request.Identity.Claims?.TryGetValue("role", out var role) == true && role == "admin";
+        return Task.FromResult(isAdmin ? AuthorizationDecision.Allow : AuthorizationDecision.Deny);
+    }
+}
+```
+
 ## Custom commands
 
 You can register custom RESP commands on `DredisServer` before calling `StartAsync` or `RunAsync`. Registered commands are automatically applied to each connection's `DredisCommandHandler`.
@@ -263,6 +296,13 @@ Dispatch order for unknown commands is:
 
 - Added optional `ICustomDataTypeStore` extension to support storage-backed custom data type commands without introducing breaking changes to `IKeyValueStore`.
 - Unknown command resolution now flows through `ICustomDataTypeStore` (when implemented), then registered `ICommand` handlers, then standard unknown-command behavior.
+
+## Redis trademark and copyright notice
+
+- Redis is a registered trademark of Redis Ltd. Any rights in the Redis name and related marks belong to Redis Ltd.
+- Redis software, source code, and official documentation are copyrighted by their respective owners.
+- Dredis is an independent, community project and is not affiliated with, endorsed by, or sponsored by Redis Ltd.
+- Official trademark policy: https://redis.io/legal/trademark-guidelines/
 
 ## Short roadmap
 
