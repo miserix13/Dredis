@@ -1,0 +1,57 @@
+name: Publish NuGet packages
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore Dredis.slnx
+
+      - name: Build
+        run: dotnet build Dredis.slnx --configuration Release --no-restore
+
+      - name: Pack Dredis
+        run: dotnet pack Dredis.csproj --configuration Release --no-build -o artifacts
+
+      - name: Pack Dredis.Abstractions.Auth
+        run: dotnet pack Dredis.Abstractions.Auth/Dredis.Abstractions.Auth.csproj --configuration Release --no-build -o artifacts
+
+      - name: Pack Dredis.Abstractions.Command
+        run: dotnet pack Dredis.Abstractions.Command/Dredis.Abstractions.Command.csproj --configuration Release --no-build -o artifacts
+
+      - name: Pack Dredis.Abstractions.Storage
+        run: dotnet pack Dredis.Abstractions.Storage/Dredis.Abstractions.Storage.csproj --configuration Release --no-build -o artifacts
+
+      - name: NuGet login (OIDC -> temporary API key)
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ secrets.NUGET_USERNAME }}
+
+      - name: Push packages to NuGet.org
+        run: |
+          dotnet nuget push "artifacts/*.nupkg" \
+            --source "https://api.nuget.org/v3/index.json" \
+            --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" \
+            --skip-duplicate

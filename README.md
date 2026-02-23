@@ -6,6 +6,31 @@ Further reading:
 
 - [Dredis vs Redis and Alternatives](Dredis-vs-Redis-and-Alternatives.md)
 
+## Publishing NuGet packages (Trusted Publishing)
+
+This repository includes a GitHub Actions workflow at `.github/workflows/publish-nuget.yml` that publishes all packable projects:
+
+- `Dredis`
+- `Dredis.Abstractions.Auth`
+- `Dredis.Abstractions.Command`
+- `Dredis.Abstractions.Storage`
+
+The workflow uses nuget.org Trusted Publishing (OIDC) and does **not** require storing a long-lived NuGet API key in GitHub secrets.
+
+One-time setup:
+
+1. On nuget.org, go to **Trusted Publishing** and add a GitHub policy with:
+    - Repository Owner: your GitHub org/user
+    - Repository: `Dredis`
+    - Workflow File: `publish-nuget.yml`
+2. Add a GitHub repository secret named `NUGET_USERNAME` with your nuget.org profile name.
+3. Ensure each package ID (`Dredis`, `Dredis.Abstractions.Auth`, `Dredis.Abstractions.Command`, `Dredis.Abstractions.Storage`) is owned by the same nuget.org owner used for the trusted policy.
+
+Publishing:
+
+- Push a tag like `v1.0.1`, or run the `Publish NuGet packages` workflow manually from Actions.
+- The workflow builds, packs, and pushes all packages from `artifacts/*.nupkg` with duplicate pushes skipped.
+
 ## RESP implementation status
 
 Currently implemented RESP commands and behavior:
