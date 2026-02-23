@@ -159,6 +159,13 @@ From a Redis client, this command can be called as `HELLO` or `HELLO one two`, a
 - `BossGroupThreadCount` (default: `1`)
 - `WorkerGroupThreadCount` (optional; when omitted, DotNetty default sizing is used)
 
+Validation note:
+
+- Invalid values fail fast during options binding/server construction.
+- `BindAddress` must be a valid IP address.
+- `Port` must be between `1` and `65535`.
+- `BossGroupThreadCount` and `WorkerGroupThreadCount` (when provided) must be greater than `0`.
+
 ### Configure with appsettings.json
 
 ```json
