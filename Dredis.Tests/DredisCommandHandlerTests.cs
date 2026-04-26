@@ -265,6 +265,72 @@ namespace Dredis.Tests
 
         [Fact]
         /// <summary>
+        /// Verifies SETNX stores a new value and returns 1.
+        /// </summary>
+        public async Task SetNx_WhenMissing_SetsValue_ReturnsOne()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("SETNX", "key", "first"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var result = Assert.IsType<IntegerRedisMessage>(response);
+                Assert.Equal(1, result.Value);
+
+                channel.WriteInbound(Command("GET", "key"));
+                channel.RunPendingTasks();
+
+                var getResponse = ReadOutbound(channel);
+                var bulk = Assert.IsType<FullBulkStringRedisMessage>(getResponse);
+                Assert.Equal("first", GetBulkString(bulk));
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
+        /// Verifies SETNX does not overwrite an existing value and returns 0.
+        /// </summary>
+        public async Task SetNx_WhenExists_DoesNotOverwrite_ReturnsZero()
+        {
+            var store = new InMemoryKeyValueStore();
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("SET", "key", "first"));
+                channel.RunPendingTasks();
+                _ = ReadOutbound(channel);
+
+                channel.WriteInbound(Command("SETNX", "key", "second"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var result = Assert.IsType<IntegerRedisMessage>(response);
+                Assert.Equal(0, result.Value);
+
+                channel.WriteInbound(Command("GET", "key"));
+                channel.RunPendingTasks();
+
+                var getResponse = ReadOutbound(channel);
+                var bulk = Assert.IsType<FullBulkStringRedisMessage>(getResponse);
+                Assert.Equal("first", GetBulkString(bulk));
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
         /// Verifies INCRBY rejects non-integer values.
         /// </summary>
         public async Task IncrBy_NonInteger_ReturnsError()
@@ -363,6 +429,32 @@ namespace Dredis.Tests
             try
             {
                 channel.WriteInbound(Command("DEL", "a", "b", "c"));
+                channel.RunPendingTasks();
+
+                var response = ReadOutbound(channel);
+                var integer = Assert.IsType<IntegerRedisMessage>(response);
+                Assert.Equal(2, integer.Value);
+            }
+            finally
+            {
+                await channel.CloseAsync();
+            }
+        }
+
+        [Fact]
+        /// <summary>
+        /// Verifies UNLINK removes keys and returns count like DEL.
+        /// </summary>
+        public async Task Unlink_RemovesKeys_ReturnsCount()
+        {
+            var store = new InMemoryKeyValueStore();
+            store.Seed("a", "1");
+            store.Seed("b", "2");
+            var channel = new EmbeddedChannel(new DredisCommandHandler(store));
+
+            try
+            {
+                channel.WriteInbound(Command("UNLINK", "a", "b", "c"));
                 channel.RunPendingTasks();
 
                 var response = ReadOutbound(channel);

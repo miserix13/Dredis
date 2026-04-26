@@ -786,6 +786,10 @@ namespace Dredis
                     await HandleSetAsync(ctx, elements);
                     break;
 
+                case "SETNX":
+                    await HandleSetNxAsync(ctx, elements);
+                    break;
+
                 case "GETBIT":
                     await HandleGetBitAsync(ctx, elements);
                     break;
@@ -819,6 +823,7 @@ namespace Dredis
                     break;
 
                 case "DEL":
+                case "UNLINK":
                     await HandleDelAsync(ctx, elements);
                     break;
 
@@ -1825,6 +1830,40 @@ namespace Dredis
             }
 
             WriteNullBulkString(ctx);
+        }
+
+        /// <summary>
+        /// Handles the SETNX command.
+        /// </summary>
+        private async Task HandleSetNxAsync(
+            IChannelHandlerContext ctx,
+            IList<IRedisMessage> args)
+        {
+            if (args.Count != 3)
+            {
+                WriteError(ctx, "ERR wrong number of arguments for 'setnx' command");
+                return;
+            }
+
+            if (!TryGetString(args[1], out var key))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            if (!TryGetBytes(args[2], out var value))
+            {
+                WriteError(ctx, "ERR null bulk string");
+                return;
+            }
+
+            var ok = await _store.SetAsync(key, value, expiration: null, SetCondition.Nx).ConfigureAwait(false);
+            if (ok)
+            {
+                Transactions.NotifyKeyModified(key, _store);
+            }
+
+            WriteInteger(ctx, ok ? 1 : 0);
         }
 
         /// <summary>
