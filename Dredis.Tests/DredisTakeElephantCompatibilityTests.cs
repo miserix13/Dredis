@@ -62,6 +62,44 @@ namespace Dredis.Tests
             }
         }
 
+        [Fact]
+        /// <summary>
+        /// Verifies TryAdd does not overwrite an existing value through the Redis provider.
+        /// </summary>
+        public async Task TakeElephantRedisStringMap_TryAdd_DoesNotOverwriteExistingValue()
+        {
+            var store = new InMemoryKeyValueStore();
+            var server = new DredisServer(store);
+            var port = GetFreePort();
+
+            var serverTask = server.RunAsync(port);
+            ConnectionMultiplexer? multiplexer = null;
+
+            try
+            {
+                multiplexer = await ConnectAsync(port);
+                var map = new RedisStringMap<string, int>(
+                    "elephant:compat",
+                    multiplexer,
+                    new ValueSerializer<int>());
+
+                Assert.True(await map.TryAddAsync("map:key", 42));
+                Assert.False(await map.TryAddAsync("map:key", 99));
+                Assert.Equal(42, await map.GetValueOrDefaultAsync("map:key"));
+            }
+            finally
+            {
+                if (multiplexer is not null)
+                {
+                    await multiplexer.CloseAsync();
+                    multiplexer.Dispose();
+                }
+
+                await server.StopAsync();
+                await serverTask;
+            }
+        }
+
         private static int GetFreePort()
         {
             var listener = new TcpListener(IPAddress.Loopback, 0);
